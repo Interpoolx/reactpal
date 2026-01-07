@@ -699,6 +699,2547 @@ tenantModulesRouter.get('/:tenantId/modules', async (c) => {
 });
 ```
 
+
+### 10. Bundle Size Analysis & Monitoring
+
+```typescript
+// scripts/analyze-bundle.js
+// Run: npm run analyze-bundle
+
+import { readFileSync, readdirSync } from 'fs';
+import { join } from 'path';
+
+const BUNDLE_LIMITS = {
+  'vendor-react': 150_000,     // 150KB max
+  'vendor-tanstack': 80_000,   // 80KB max
+  'module-cms': 50_000,        // 50KB max
+  'module-crm': 100_000,       // 100KB max
+  'module-seo': 60_000,        // 60KB max
+  'module-builder': 200_000,   // 200KB max (rich editor)
+  'shared': 30_000,            // 30KB max
+};
+
+function analyzeBundle() {
+  const distPath = join(process.cwd(), 'web/dist/assets');
+  const files = readdirSync(distPath);
+  
+  const violations = [];
+  
+  for (const file of files) {
+    const size = readFileSync(join(distPath, file)).length;
+    
+    // Check against limits
+    for (const [chunk, limit] of Object.entries(BUNDLE_LIMITS)) {
+      if (file.includes(chunk) && size > limit) {
+        violations.push({
+          chunk,
+          file,
+          size,
+          limit,
+          over: size - limit,
+        });
+      }
+    }
+  }
+  
+  if (violations.length > 0) {
+    console.error('❌ Bundle size violations:');
+    violations.forEach(v => {
+      console.error(`  ${v.chunk}: ${(v.size/1000).toFixed(1)}KB (limit: ${(v.limit/1000).toFixed(1)}KB, over by ${(v.over/1000).toFixed(1)}KB)`);
+    });
+    process.exit(1);
+  }
+  
+  console.log('✅ All chunks within size limits');
+}
+
+analyzeBundle();
+```
+
+### 11. Tenant Context Provider (Frontend)
+
+```typescript
+// web/src/context/TenantContext.tsx
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+
+interface TenantContextValue {
+  tenant: TenantDefinition | null;
+  tenantId: string | null;
+  tenantModules: string[];
+  isLoading: boolean;
+  error: Error | null;
+  hasModule: (moduleId: string) => boolean;
+}
+
+const TenantContext = createContext<TenantContextValue | null>(null);
+
+export const TenantProvider: FC<{ children: ReactNode }> = ({ children }) => {
+  const [tenant, setTenant] = useState<TenantDefinition | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  
+  useEffect(() => {
+    // Resolve tenant from current domain
+    const domain = window.location.hostname;
+    
+    fetch(`/api/tenants/resolve?domain=${domain}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          setTenant(data.tenant);
+        } else {
+          setError(new Error(data.error || 'Failed to resolve tenant'));
+        }
+      })
+      .catch(err => setError(err))
+      .finally(() => setIsLoading(false));
+  }, []);
+  
+  const tenantModules = useMemo(() => {
+    if (!tenant) return [];
+    return [
+      ...CORE_MODULES,
+      ...DEFAULT_MODULES.filter(m => !tenant.modules.disabled.includes(m)),
+      ...tenant.modules.enabled,
+    ];
+  }, [tenant]);
+  
+  const hasModule = useCallback((moduleId: string) => {
+    return tenantModules.includes(moduleId);
+  }, [tenantModules]);
+  
+  return (
+    <TenantContext.Provider value={{
+      tenant,
+      tenantId: tenant?.id ?? null,
+      tenantModules,
+      isLoading,
+      error,
+      hasModule,
+    }}>
+      {children}
+    </TenantContext.Provider>
+  );
+};
+
+export const useTenant = () => {
+  const ctx = useContext(TenantContext);
+  if (!ctx) throw new Error('useTenant must be used within TenantProvider');
+  return ctx;
+};
+```
+
+### 12. Multi-Tenant Bundle Strategy Summary
+
+```
+Bundle Loading Strategy:
+┌─────────────────────────────────────────────────────────────┐
+│                     INITIAL LOAD (~200KB)                   │
+├─────────────────────────────────────────────────────────────┤
+│ vendor-react.js      (~45KB)  - React + ReactDOM            │
+│ vendor-tanstack.js   (~35KB)  - Router + Query              │
+│ vendor-icons.js      (~20KB)  - Core Lucide icons           │
+│ main.js              (~50KB)  - App shell + tenant resolver │
+│ shared.js            (~25KB)  - Shared utilities            │
+│ styles.css           (~25KB)  - Core styles                 │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+              Tenant Resolution (from domain)
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│              LAZY LOADED MODULES (on navigation)            │
+├─────────────────────────────────────────────────────────────┤
+│ module-cms.js        (~45KB)  - if tenant.has('cms')        │
+│ module-crm.js        (~78KB)  - if tenant.has('crm')        │
+│ module-seo.js        (~52KB)  - if tenant.has('seo')        │
+│ module-builder.js    (~180KB) - if tenant.has('block-builder')│
+│ module-jobs.js       (~40KB)  - if tenant.has('jobs')       │
+│ module-ecommerce.js  (~150KB) - if tenant.has('ecommerce')  │
+└─────────────────────────────────────────────────────────────┘
+
+Result: Tenant with only CMS loads ~245KB (not ~800KB with all modules)
+```
+
 ---
 
-[... ADDITIONAL SECTIONS FROM ORIGINAL DOCUMENT ...]
+## 🎨 Theme Engine (WordPress-Like)
+
+Each tenant can choose their own theme. Templates cascade: **global defaults → post type → individual post overrides**.
+
+### 1. Theme Definition
+
+```typescript
+interface ThemeDefinition {
+  id: string;                           // 'developer-portfolio', 'law-firm'
+  name: string;
+  templates: {
+    layout: string;                     // 'layouts/default.tsx'
+    home: string;
+    page: string;
+    archive: string;
+    single: string;
+  };
+  cssVariables: Record<string, string>;
+  contentTypeTemplates?: Record<string, { archive?: string; single?: string }>;
+}
+```
+
+### 2. Template Hierarchy (WordPress-Like Cascade)
+
+```
+SINGLE POST/PAGE:
+1. Post-specific template    → content.template = 'custom-landing'
+2. Post-type template        → templates/single-{contentType}.tsx
+3. Default single            → templates/single.tsx
+4. Fallback                  → templates/page.tsx
+
+ARCHIVE/LISTING:
+1. Taxonomy archive          → templates/archive-{taxonomy}.tsx
+2. Content type archive      → templates/archive-{contentType}.tsx
+3. Default archive           → templates/archive.tsx
+4. Fallback                  → templates/index.tsx
+```
+
+### 3. Tenant Theme Configuration
+
+```typescript
+interface TenantThemeConfig {
+  tenantId: string;
+  themeId: string;                      // Selected theme
+  customizations: {
+    colors: Record<string, string>;     // CSS variable overrides
+    fonts: Record<string, string>;
+    settings: Record<string, any>;
+  };
+  templateOverrides: Record<string, string>;  // Override specific templates
+}
+```
+
+---
+
+## 🔐 Roles & Permissions (RBAC)
+
+Comprehensive Role-Based Access Control with role-specific UI and admin impersonation.
+
+### 1. Permission System
+
+```typescript
+const PERMISSIONS = {
+  // Content
+  'content:read': 'View published content',
+  'content:create': 'Create content',
+  'content:edit_own': 'Edit own content',
+  'content:edit_any': 'Edit any content',
+  'content:delete_own': 'Delete own content',
+  'content:delete_any': 'Delete any content',
+  'content:publish': 'Publish content',
+  
+  // Media
+  'media:read': 'View media',
+  'media:upload': 'Upload media',
+  'media:delete_any': 'Delete any media',
+  
+  // Users
+  'users:read': 'View users',
+  'users:create': 'Create users',
+  'users:edit': 'Edit users',
+  'users:assign_roles': 'Assign roles',
+  
+  // Settings
+  'settings:read': 'View settings',
+  'settings:edit': 'Edit settings',
+  'settings:theme': 'Customize theme',
+  
+  // Modules
+  'module:cms': 'Access CMS module',
+  'module:crm': 'Access CRM module',
+  'module:seo': 'Access SEO module',
+  
+  // Admin
+  'admin:access': 'Access admin panel',
+  'admin:view_as': 'View as other roles',
+  'admin:impersonate': 'Impersonate users',
+} as const;
+```
+
+### 2. Built-in Roles
+
+| Role | Priority | Scope | Key Permissions |
+|------|----------|-------|-----------------|
+| **super_admin** | 100 | Global | All permissions across all tenants |
+| **admin** | 90 | Tenant | Full tenant access + view_as |
+| **editor** | 70 | Tenant | Content management + publish |
+| **author** | 50 | Tenant | Own content only |
+| **contributor** | 30 | Tenant | Create drafts, no publish |
+| **subscriber** | 10 | Tenant | Read only |
+
+### 3. Permission Middleware (Backend)
+
+```typescript
+export function requirePermission(...required: Permission[]) {
+  return async (c: Context, next: Next) => {
+    const role = await getUserRole(c.get('userId'), c.get('tenantId'));
+    const hasAll = required.every(p => role.permissions.includes(p));
+    if (!hasAll) return c.json({ error: 'Forbidden' }, 403);
+    await next();
+  };
+}
+
+// Usage
+app.delete('/api/content/:id', requirePermission('content:delete_any'), handler);
+```
+
+### 4. Frontend Permission Hook
+
+```typescript
+export function usePermissions() {
+  const { role, viewingAsRole } = useAuth();
+  const effectiveRole = viewingAsRole || role;
+  
+  const can = (permission: Permission) => 
+    effectiveRole?.permissions.includes(permission) ?? false;
+  
+  return { can, canAny, canAll, isViewingAs: !!viewingAsRole };
+}
+```
+
+### 5. Role-Specific Admin Sidebar
+
+```typescript
+export const AdminSidebar: FC = () => {
+  const { can } = usePermissions();
+  const { hasModule } = useTenant();
+  
+  const items = [
+    { to: '/hpanel', icon: Home, label: 'Dashboard', permission: 'admin:access' },
+    { to: '/hpanel/cms', icon: FileText, label: 'Content', permission: 'module:cms', module: 'cms' },
+    { to: '/hpanel/crm', icon: Users, label: 'CRM', permission: 'module:crm', module: 'crm' },
+    { to: '/hpanel/seo', icon: Search, label: 'SEO', permission: 'module:seo', module: 'seo' },
+    { to: '/hpanel/users', icon: UserCog, label: 'Users', permission: 'users:read' },
+    { to: '/hpanel/settings', icon: Settings, label: 'Settings', permission: 'settings:read' },
+  ].filter(item => 
+    can(item.permission) && (!item.module || hasModule(item.module))
+  );
+  
+  return <aside>{items.map(i => <SidebarItem key={i.to} {...i} />)}</aside>;
+};
+```
+
+### 6. "View As Role" Feature (Admin Impersonation)
+
+```typescript
+// AuthContext with View As support
+export const AuthProvider: FC = ({ children }) => {
+  const [viewingAsRole, setViewingAsRole] = useState<RoleDefinition | null>(null);
+  
+  const setViewAsRole = async (roleId: string | null) => {
+    if (!roleId) {
+      setViewingAsRole(null);
+      sessionStorage.removeItem('viewAsRole');
+      return;
+    }
+    
+    // Verify permission
+    if (!role?.permissions.includes('admin:view_as')) return;
+    
+    // Cannot view as higher or equal priority role
+    const target = await fetchRole(roleId);
+    if (target.priority >= role.priority) return;
+    
+    setViewingAsRole(target);
+    sessionStorage.setItem('viewAsRole', roleId);
+  };
+  
+  return (
+    <AuthContext.Provider value={{ viewingAsRole, setViewAsRole, ... }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+```
+
+### 7. View As Role Switcher UI
+
+```typescript
+export const ViewAsRoleSwitcher: FC = () => {
+  const { role, viewingAsRole, setViewAsRole, exitViewAs } = useAuth();
+  const { can } = usePermissions();
+  
+  if (!can('admin:view_as')) return null;
+  
+  return (
+    <>
+      {viewingAsRole && (
+        <div className="bg-yellow-500 text-black px-4 py-2 flex justify-between">
+          <span>Viewing as: <strong>{viewingAsRole.name}</strong></span>
+          <Button size="sm" onClick={exitViewAs}>Exit View Mode</Button>
+        </div>
+      )}
+      
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="sm">
+            <Eye className="w-4 h-4 mr-2" /> View As
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuLabel>Select Role</DropdownMenuLabel>
+          {roles.filter(r => r.priority < role.priority).map(r => (
+            <DropdownMenuItem key={r.id} onClick={() => setViewAsRole(r.id)}>
+              {r.name}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
+  );
+};
+```
+
+### 8. Tenant-Specific Settings
+
+```typescript
+// Settings scoped per tenant and filtered by enabled modules
+interface TenantSettings {
+  tenantId: string;
+  general: {
+    siteName: string;
+    siteTagline: string;
+    timezone: string;
+    dateFormat: string;
+  };
+  modules: {
+    cms?: { postsPerPage: number; enableComments: boolean };
+    crm?: { defaultRecipient: string; enableReCaptcha: boolean };
+    seo?: { enableSitemap: boolean; googleAnalyticsId: string };
+  };
+}
+
+// API returns only settings for enabled modules
+app.get('/api/settings', requirePermission('settings:read'), async (c) => {
+  const tenant = c.get('tenant');
+  const settings = await getSettings(tenant.id);
+  
+  // Filter to only enabled modules
+  const filteredModules = Object.fromEntries(
+    Object.entries(settings.modules).filter(([id]) => 
+      tenant.modules.enabled.includes(id)
+    )
+  );
+  
+  return c.json({ ...settings, modules: filteredModules });
+});
+```
+
+### 9. Database Schema for RBAC
+
+```sql
+CREATE TABLE roles (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  permissions TEXT NOT NULL,           -- JSON array of permission strings
+  is_system INTEGER DEFAULT 0,         -- Cannot be deleted
+  tenant_id TEXT,                       -- NULL = global role
+  priority INTEGER DEFAULT 50,
+  UNIQUE(name, tenant_id)
+);
+
+CREATE TABLE user_roles (
+  user_id TEXT NOT NULL,
+  role_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+  assigned_by TEXT,
+  assigned_at INTEGER DEFAULT (strftime('%s', 'now')),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+  UNIQUE(user_id, tenant_id)            -- One role per user per tenant
+);
+
+---
+
+## 📄 Page Types & Admin Mode
+
+ReactPress supports two page types with special admin-mode behaviors.
+
+### 1. Page Types
+
+| Type | Description |
+|------|-------------|
+| **Standard Page** | Traditional React template rendering |
+| **Block Builder Page** | Visual drag-and-drop blocks (has floating edit button for admins) |
+
+### 2. Admin Mode Detection
+
+```typescript
+export function useAdminMode() {
+  const { user, role } = useAuth();
+  const tenantParam = useSearchParams().get('tenant');
+  
+  const isAdmin = role?.permissions.includes('admin:access') ?? false;
+  
+  return { isAdmin, tenantParam };
+}
+```
+
+### 3. Floating Block Editor Button
+
+```typescript
+// Only visible for admins on block-builder pages
+export const FloatingEditorButton: FC<{ pageId: string }> = ({ pageId }) => {
+  const { isAdmin } = useAdminMode();
+  if (!isAdmin) return null;
+  
+  return (
+    <button
+      onClick={() => navigate(`/hpanel/builder/${pageId}`)}
+      className="fixed bottom-6 right-6 z-50 p-4 rounded-full 
+                 bg-primary text-white shadow-lg"
+    >
+      <Pencil className="w-6 h-6" />
+    </button>
+  );
+};
+
+// In page layout
+{page.template === 'block-builder' && <FloatingEditorButton pageId={page.id} />}
+```
+
+### 4. Tenant Switcher (Admin Only)
+
+```typescript
+export const TenantSwitcher: FC = () => {
+  const { isAdmin } = useAdminMode();
+  if (!isAdmin) return null;
+  
+  const { data: tenants } = useQuery({ queryKey: ['tenants'], queryFn: fetchAllTenants });
+  
+  const handleChange = (tenantId: string) => {
+    const params = new URLSearchParams(location.search);
+    params.set('tenant', tenantId);
+    navigate(`${location.pathname}?${params.toString()}`);
+  };
+  
+  return (
+    <Select onValueChange={handleChange}>
+      <SelectTrigger><Building2 /> Select Tenant</SelectTrigger>
+      <SelectContent>
+        {tenants?.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+      </SelectContent>
+    </Select>
+  );
+};
+```
+
+### 5. Admin-Aware Links (?tenant=xxx)
+
+```typescript
+// All links preserve tenant context for admins
+export const AdminLink: FC<LinkProps> = ({ to, children, ...props }) => {
+  const { isAdmin, tenantParam } = useAdminMode();
+  
+  const href = useMemo(() => {
+    if (!isAdmin || !tenantParam) return to;
+    const url = new URL(to, window.location.origin);
+    url.searchParams.set('tenant', tenantParam);
+    return url.pathname + url.search;
+  }, [to, isAdmin, tenantParam]);
+  
+  return <Link to={href} {...props}>{children}</Link>;
+};
+
+// Usage: <AdminLink to="/hpanel/cms">Content</AdminLink>
+// Output: /hpanel/cms?tenant=abc123 (for admin viewing tenant abc123)
+```
+
+### 6. Backend Tenant Override
+
+```typescript
+// Admin can override tenant via ?tenant=xxx
+export async function tenantResolverMiddleware(c: Context, next: Next) {
+  const tenantParam = c.req.query('tenant');
+  const user = c.get('user');
+  
+  // Admin override
+  if (tenantParam && user?.permissions.includes('admin:access')) {
+    const tenant = await getTenantById(tenantParam);
+    if (tenant) {
+      c.set('tenant', tenant);
+      c.set('tenantOverride', true);  // Audit flag
+      return next();
+    }
+  }
+  
+  // Default: domain resolution
+  const tenant = await getTenantByDomain(c.req.header('host'));
+  c.set('tenant', tenant);
+  return next();
+}
+```
+
+### 7. Page Rendering Flow
+
+```
+REQUEST → Tenant Resolution (admin override OR domain)
+       → Template Selection (block-builder OR standard)
+       → Admin Enhancements:
+         • TenantSwitcher in header
+         • All <AdminLink>s include ?tenant=xxx
+         • FloatingEditorButton on block-builder pages
+```
+
+---
+
+## �🏗️ Architecture Patterns
+
+### 1. Content-Type System (WordPress-Inspired Core)
+
+This is the **central innovation** of ReactPress 2.0.
+
+#### Content Type Definition
+
+```
+interface ContentTypeDefinition {
+  // Identity
+  id: string;                    // e.g., 'job-listing', 'law-statute', 'business-directory'
+  name: string;                   // Display name: "Job Listings"
+  singular: string;                // "Job"
+  plural: string;                  // "Jobs"
+  icon: LucideIcon;               // Briefcase, Scale, Building2, etc.
+  description?: string;
+  
+  // Custom Fields (Dynamic Schema)
+  fields: FieldDefinition[];
+  
+  // Taxonomies (Categories, Tags, Custom)
+  taxonomies: TaxonomyDefinition[];
+  
+  // Routing Configuration
+  routing: {
+    basePath: string;               // e.g., '/jobs', '/statutes', '/directory'
+    hasArchive: boolean;            // /jobs
+    hasSingle: boolean;             // /jobs/senior-developer
+    archiveTemplate?: string;       // Archive template override
+    singleTemplate?: string;        // Single template override
+    slugSource: 'title' | 'id' | 'custom'; // How to generate URLs
+  };
+  
+  // UI/UX Configuration
+  ui: {
+    listView: 'card' | 'list' | 'table' | 'grid';
+    enableFeatured: boolean;         // Featured content
+    enableComments: boolean;         // Comments system
+    enableFeaturedImage: boolean;
+    enableGallery: boolean;
+    enableAuthor: boolean;
+    enableDate: boolean;
+    permissions: {
+      read: string[];              // Roles that can read
+      create: string[];            // Roles that can create
+      edit: string[];              // Roles that can edit own
+      editAll: string[];           // Roles that can edit any
+      delete: string[];             // Roles that can delete own
+      deleteAll: string[];          // Roles that can delete any
+    };
+  };
+  
+  // SEO Configuration
+  seo: {
+    enableSitemap: boolean;
+    enableRss: boolean;
+    defaultTitleTemplate: string;   // "%title% | %site%"
+    defaultMetaDescription: string;
+  };
+  
+  // Module Registration
+  moduleId: string;                // Module providing this content type
+  tenantScope: 'all' | string[]; // Which tenants can use it
+}
+```
+
+#### Field Types
+
+```
+type FieldType = 
+  | 'text'                          // Single line text
+  | 'textarea'                      // Multi-line text
+  | 'editor'                        // Rich text (Tiptap)
+  | 'number'                        // Numeric input
+  | 'decimal'                       // Decimal numbers
+  | 'date'                          // Date picker
+  | 'datetime'                      // Date & time
+  | 'email'                         // Email validation
+  | 'url'                           // URL validation
+  | 'phone'                         // Phone number
+  | 'select'                        // Dropdown (single)
+  | 'multiselect'                   // Dropdown (multiple)
+  | 'radio'                         // Radio buttons
+  | 'checkbox'                      // Checkboxes
+  | 'toggle'                        // Boolean switch
+  | 'file'                          // File upload (R2)
+  | 'image'                         // Image upload (R2)
+  | 'gallery'                       // Multiple images
+  | 'relationship'                   // Related content items
+  | 'taxonomy'                       // Taxonomy term selector
+  | 'json'                          // JSON editor
+  | 'code'                          // Code editor
+  | 'color'                         // Color picker
+  | 'location'                      // Location picker (map)
+  | 'rating'                        // Star rating;
+
+interface FieldDefinition {
+  id: string;                      // Field identifier
+  name: string;                     // Display name
+  type: FieldType;                  // Field type
+  required: boolean;
+  defaultValue?: any;
+  placeholder?: string;
+  helpText?: string;
+  
+  // For select/multiselect/radio
+  options?: Array<{ value: string; label: string; icon?: LucideIcon }>;
+  
+  // For relationship fields
+  relationshipTo?: string;          // Content type ID to relate to
+  relationshipType?: 'one-to-one' | 'one-to-many' | 'many-to-many';
+  
+  // Validation
+  validation?: {
+    min?: number;
+    max?: number;
+    pattern?: string;              // Regex
+    custom?: ZodSchema;
+  };
+  
+  // Conditional visibility
+  condition?: {
+    field: string;                 // Show this field when another field equals value
+    operator: 'equals' | 'notEquals' | 'contains' | 'greaterThan';
+    value: any;
+  };
+  
+  // UI customization
+  ui?: {
+    width?: 'full' | 'half' | 'third' | 'quarter';
+    order?: number;
+    group?: string;                // Group related fields
+  };
+}
+```
+
+#### Taxonomy Definition
+
+```
+interface TaxonomyDefinition {
+  id: string;                      // e.g., 'job-type', 'location', 'practice-area'
+  name: string;                     // "Job Type"
+  singular: string;                  // "Job Type"
+  plural: string;                   // "Job Types"
+  hierarchical: boolean;            // True = Categories, False = Tags
+  icon: LucideIcon;
+  description?: string;
+  
+  // Taxonomy-specific fields
+  fields?: FieldDefinition[];       // Add custom fields to taxonomy terms
+  
+  // UI configuration
+  ui?: {
+    showInSidebar: boolean;         // Show in admin sidebar
+    showInFilter: boolean;          // Show in archive filters
+    enableColor: boolean;           // Assign colors to terms
+    enableIcon: boolean;            // Assign icons to terms
+  };
+}
+```
+
+#### Example: Job Listings Content Type
+
+```
+export const JobListingsContentType: ContentTypeDefinition = {
+  id: 'job-listing',
+  name: 'Job Listings',
+  singular: 'Job',
+  plural: 'Jobs',
+  icon: Briefcase,
+  description: 'Post and manage job openings',
+  
+  fields: [
+    {
+      id: 'company',
+      name: 'Company Name',
+      type: 'text',
+      required: true,
+      ui: { width: 'full' }
+    },
+    {
+      id: 'location',
+      name: 'Location',
+      type: 'text',
+      required: true,
+      placeholder: 'e.g., Remote, New York, London',
+    },
+    {
+      id: 'remote',
+      name: 'Remote Position',
+      type: 'toggle',
+      defaultValue: false,
+      required: true,
+    },
+    {
+      id: 'salary',
+      name: 'Salary Range',
+      type: 'text',
+      placeholder: 'e.g., $80,000 - $120,000',
+      required: false,
+    },
+    {
+      id: 'experience',
+      name: 'Experience Level',
+      type: 'select',
+      required: true,
+      options: [
+        { value: 'entry', label: 'Entry Level' },
+        { value: 'mid', label: 'Mid-Senior' },
+        { value: 'senior', label: 'Senior' },
+        { value: 'executive', label: 'Executive' },
+      ]
+    },
+    {
+      id: 'employment_type',
+      name: 'Employment Type',
+      type: 'select',
+      required: true,
+      options: [
+        { value: 'full-time', label: 'Full-time' },
+        { value: 'part-time', label: 'Part-time' },
+        { value: 'contract', label: 'Contract' },
+        { value: 'freelance', label: 'Freelance' },
+      ]
+    },
+    {
+      id: 'apply_url',
+      name: 'Application URL',
+      type: 'url',
+      required: true,
+      placeholder: 'https://...',
+      helpText: 'Where candidates should apply'
+    },
+    {
+      id: 'description',
+      name: 'Job Description',
+      type: 'editor',
+      required: true,
+      ui: { width: 'full', group: 'Details' }
+    },
+    {
+      id: 'requirements',
+      name: 'Requirements',
+      type: 'textarea',
+      required: true,
+      helpText: 'List key requirements',
+      ui: { group: 'Details' }
+    },
+    {
+      id: 'benefits',
+      name: 'Benefits',
+      type: 'multiselect',
+      options: [
+        { value: 'health', label: 'Health Insurance' },
+        { value: 'dental', label: 'Dental Insurance' },
+        { value: 'remote', label: 'Remote Work' },
+        { value: '401k', label: '401(k) Match' },
+      ],
+      ui: { group: 'Benefits' }
+    },
+    {
+      id: 'featured_image',
+      name: 'Featured Image',
+      type: 'image',
+      required: false,
+      ui: { width: 'full' }
+    }
+  ],
+  
+  taxonomies: [
+    {
+      id: 'job-category',
+      name: 'Job Category',
+      singular: 'Category',
+      plural: 'Categories',
+      hierarchical: true,
+      icon: Folder,
+      ui: { showInSidebar: true, showInFilter: true }
+    },
+    {
+      id: 'job-skill',
+      name: 'Skills',
+      singular: 'Skill',
+      plural: 'Skills',
+      hierarchical: false,
+      icon: Badge,
+      ui: { showInFilter: true, enableColor: true }
+    }
+  ],
+  
+  routing: {
+    basePath: '/jobs',
+    hasArchive: true,
+    hasSingle: true,
+    slugSource: 'title'
+  },
+  
+  ui: {
+    listView: 'card',
+    enableFeatured: true,
+    enableFeaturedImage: true,
+    permissions: {
+      read: ['public', 'user', 'admin'],
+      create: ['admin', 'hr'],
+      edit: ['admin', 'hr'],
+      editAll: ['admin'],
+      delete: ['admin', 'hr'],
+      deleteAll: ['admin'],
+    }
+  },
+  
+  seo: {
+    enableSitemap: true,
+    enableRss: true,
+    defaultTitleTemplate: "%title% | Jobs at %site%",
+    defaultMetaDescription: 'View and apply for job openings'
+  },
+  
+  moduleId: 'modules-jobs',
+  tenantScope: 'all'
+};
+```
+
+#### Example: Law Statutes Content Type
+
+```
+export const LawStatutesContentType: ContentTypeDefinition = {
+  id: 'law-statutes',
+  name: 'Law Statutes',
+  singular: 'Statute',
+  plural: 'Statutes',
+  icon: Scale,
+  
+  fields: [
+    {
+      id: 'title',
+      name: 'Statute Title',
+      type: 'text',
+      required: true
+    },
+    {
+      id: 'statute_number',
+      name: 'Statute Number',
+      type: 'text',
+      required: true,
+      placeholder: 'e.g., 42 USC § 1983',
+    },
+    {
+      id: 'jurisdiction',
+      name: 'Jurisdiction',
+      type: 'select',
+      required: true,
+      options: [
+        { value: 'federal', label: 'Federal' },
+        { value: 'state', label: 'State' },
+        { value: 'local', label: 'Local' },
+      ]
+    },
+    {
+      id: 'state',
+      name: 'State',
+      type: 'select',
+      condition: { field: 'jurisdiction', operator: 'equals', value: 'state' },
+      options: [
+        { value: 'ca', label: 'California' },
+        { value: 'ny', label: 'New York' },
+        { value: 'tx', label: 'Texas' },
+        // ... all states
+      ]
+    },
+    {
+      id: 'effective_date',
+      name: 'Effective Date',
+      type: 'date',
+      required: true
+    },
+    {
+      id: 'repealed',
+      name: 'Repealed?',
+      type: 'toggle',
+      defaultValue: false
+    },
+    {
+      id: 'repealed_date',
+      name: 'Repealed Date',
+      type: 'date',
+      condition: { field: 'repealed', operator: 'equals', value: true }
+    },
+    {
+      id: 'full_text',
+      name: 'Full Text',
+      type: 'editor',
+      required: true,
+      ui: { width: 'full', group: 'Content' }
+    },
+    {
+      id: 'summary',
+      name: 'Summary',
+      type: 'textarea',
+      required: true,
+      helpText: 'Brief summary for listings',
+      ui: { group: 'Metadata' }
+    }
+  ],
+  
+  taxonomies: [
+    {
+      id: 'practice-area',
+      name: 'Practice Area',
+      singular: 'Practice Area',
+      plural: 'Practice Areas',
+      hierarchical: true,
+      icon: Gavel
+    },
+    {
+      id: 'legal-topic',
+      name: 'Legal Topics',
+      singular: 'Topic',
+      plural: 'Topics',
+      hierarchical: false,
+      icon: Tags
+    }
+  ],
+  
+  routing: {
+    basePath: '/statutes',
+    hasArchive: true,
+    hasSingle: true,
+    slugSource: 'custom'
+  },
+  
+  ui: {
+    listView: 'list',
+    enableFeatured: false,
+    permissions: {
+      read: ['public'],
+      create: ['admin', 'legal-team'],
+      edit: ['admin', 'legal-team'],
+      editAll: ['admin'],
+      delete: ['admin'],
+      deleteAll: ['admin'],
+    }
+  },
+  
+  seo: {
+    enableSitemap: true,
+    enableRss: false,
+    defaultTitleTemplate: "%title% | Legal Library"
+  },
+  
+  moduleId: 'modules-laws',
+  tenantScope: ['legal']
+};
+```
+
+### 2. Database Schema (Content-Type-First)
+
+```
+-- ===== CONTENT TYPES =====
+CREATE TABLE content_types (
+  id TEXT PRIMARY KEY,
+  module_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  singular TEXT NOT NULL,
+  plural TEXT NOT NULL,
+  icon TEXT,
+  description TEXT,
+  fields TEXT NOT NULL,          -- JSON: FieldDefinition[]
+  taxonomies TEXT NOT NULL,        -- JSON: TaxonomyDefinition[]
+  routing TEXT NOT NULL,           -- JSON: Routing config
+  ui TEXT NOT NULL,               -- JSON: UI config
+  seo TEXT,                      -- JSON: SEO config
+  permissions TEXT,                -- JSON: Permissions
+  tenant_scope TEXT,              -- JSON: 'all' or ['tenant1', 'tenant2']
+  enabled INTEGER DEFAULT 1,
+  created_at INTEGER DEFAULT (strftime('%s', 'now')),
+  updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+);
+
+-- ===== CONTENT ITEMS (Unified Table) =====
+CREATE TABLE content_items (
+  id TEXT PRIMARY KEY,
+  content_type_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  excerpt TEXT,
+  content TEXT,                  -- JSON: field values
+  status TEXT DEFAULT 'draft',   -- draft | published | archived | scheduled
+  author_id TEXT,
+  featured INTEGER DEFAULT 0,
+  order_index INTEGER DEFAULT 0,
+  published_at INTEGER,
+  scheduled_at INTEGER,
+  created_at INTEGER DEFAULT (strftime('%s', 'now')),
+  updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+  
+  FOREIGN KEY (content_type_id) REFERENCES content_types(id) ON DELETE CASCADE,
+  UNIQUE(slug, content_type_id, tenant_id)
+);
+
+-- Create index for performance
+CREATE INDEX idx_content_items_type_tenant ON content_items(content_type_id, tenant_id);
+CREATE INDEX idx_content_items_status ON content_items(status);
+CREATE INDEX idx_content_items_featured ON content_items(featured);
+CREATE INDEX idx_content_items_published ON content_items(published_at);
+
+-- ===== TAXONOMIES =====
+CREATE TABLE taxonomies (
+  id TEXT PRIMARY KEY,
+  content_type_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  singular TEXT NOT NULL,
+  plural TEXT NOT NULL,
+  hierarchical INTEGER DEFAULT 0,
+  icon TEXT,
+  description TEXT,
+  fields TEXT,                   -- JSON: Additional fields for terms
+  ui TEXT,                      -- JSON: UI config
+  tenant_id TEXT NOT NULL,
+  created_at INTEGER DEFAULT (strftime('%s', 'now')),
+  
+  FOREIGN KEY (content_type_id) REFERENCES content_types(id) ON DELETE CASCADE
+);
+
+-- ===== TAXONOMY TERMS =====
+CREATE TABLE terms (
+  id TEXT PRIMARY KEY,
+  taxonomy_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  description TEXT,
+  parent_id TEXT,
+  order_index INTEGER DEFAULT 0,
+  color TEXT,
+  icon TEXT,
+  tenant_id TEXT NOT NULL,
+  created_at INTEGER DEFAULT (strftime('%s', 'now')),
+  
+  FOREIGN KEY (taxonomy_id) REFERENCES taxonomies(id) ON DELETE CASCADE,
+  FOREIGN KEY (parent_id) REFERENCES terms(id) ON DELETE SET NULL,
+  UNIQUE(slug, taxonomy_id, tenant_id)
+);
+
+-- ===== TERM RELATIONSHIPS (Content ↔ Taxonomy) =====
+CREATE TABLE term_relationships (
+  id TEXT PRIMARY KEY,
+  content_item_id TEXT NOT NULL,
+  term_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+  created_at INTEGER DEFAULT (strftime('%s', 'now')),
+  
+  FOREIGN KEY (content_item_id) REFERENCES content_items(id) ON DELETE CASCADE,
+  FOREIGN KEY (term_id) REFERENCES terms(id) ON DELETE CASCADE,
+  UNIQUE(content_item_id, term_id)
+);
+
+-- ===== REVISIONS (Version Control) =====
+CREATE TABLE content_revisions (
+  id TEXT PRIMARY KEY,
+  content_item_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT,                  -- JSON: field values snapshot
+  revision_number INTEGER,
+  author_id TEXT,
+  created_at INTEGER DEFAULT (strftime('%s', 'now')),
+  
+  FOREIGN KEY (content_item_id) REFERENCES content_items(id) ON DELETE CASCADE
+);
+
+-- ===== MEDIA =====
+CREATE TABLE media (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  width INTEGER,
+  height INTEGER,
+  alt_text TEXT,
+  caption TEXT,
+  r2_key TEXT NOT NULL,           -- R2 storage key
+  r2_url TEXT NOT NULL,           -- Public URL
+  uploaded_by TEXT,
+  created_at INTEGER DEFAULT (strftime('%s', 'now'))
+);
+
+-- ===== SEO META =====
+CREATE TABLE seo_meta (
+  id TEXT PRIMARY KEY,
+  path TEXT UNIQUE NOT NULL,
+  title TEXT,
+  description TEXT,
+  og_image TEXT,
+  og_type TEXT,
+  canonical_url TEXT,
+  no_index INTEGER DEFAULT 0,
+  no_follow INTEGER DEFAULT 0,
+  tenant_id TEXT NOT NULL
+);
+```
+
+### 3. Cloudflare-Native Development
+
+#### Wrangler Configuration (`backend/wrangler.toml`)
+
+```
+name = "reactpress-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# D1 Database Binding
+[[d1_databases]]
+binding = "DB"
+database_name = "reactpress-db"
+database_id = "your-database-id"
+migrations_dir = "db/migrations"
+
+# R2 Storage Binding
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "reactpress-uploads"
+jurisdiction = "us"
+
+# KV Cache Binding (Optional)
+[[kv_namespaces]]
+binding = "CACHE"
+id = "your-kv-id"
+preview_id = "your-preview-kv-id"
+
+# Variables
+[vars]
+ENVIRONMENT = "development"
+ALLOWED_ORIGINS = "http://localhost:3000,http://localhost:5173"
+
+# Triggers (Optional - for background jobs)
+[triggers]
+crons = ["0 * * * *"]  # Hourly tasks
+```
+
+#### Migration System
+
+```
+// shared/lib/migrations.ts
+export class D1MigrationRunner {
+  constructor(private db: D1Database) {}
+  
+  async runMigrations() {
+    const executed = await this.getExecutedMigrations();
+    const pending = await this.getPendingMigrations();
+    
+    for (const migration of pending) {
+      console.log(`Running migration: ${migration.name}`);
+      await this.db.exec(migration.sql);
+      await this.recordMigration(migration);
+      console.log(`✅ Migration ${migration.name} completed`);
+    }
+  }
+  
+  private async getExecutedMigrations(): Promise<string[]> {
+    // Query migrations table
+  }
+  
+  private async getPendingMigrations(): Promise<Migration[]> {
+    // Read db/migrations/*.sql files
+  }
+}
+
+// Usage in Workers
+app.use('*', async (c, next) => {
+  const runner = new D1MigrationRunner(c.env.DB);
+  await runner.runMigrations();
+  await next();
+});
+```
+
+#### R2 Storage Adapter
+
+```
+// shared/lib/r2-adapter.ts
+export class R2Storage {
+  constructor(private bucket: R2Bucket) {}
+  
+  async upload(file: File, tenantId: string, folder: string): Promise<string> {
+    const key = `${tenantId}/${folder}/${Date.now()}-${file.name}`;
+    
+    await this.bucket.put(key, file.stream(), {
+      httpMetadata: {
+        contentType: file.type
+      }
+    });
+    
+    const url = `${process.env.R2_PUBLIC_URL}/${key}`;
+    return url;
+  }
+  
+  async delete(key: string): Promise<void> {
+    await this.bucket.delete(key);
+  }
+  
+  async deleteMultiple(keys: string[]): Promise<void> {
+    await this.bucket.delete(keys);
+  }
+  
+  async list(prefix: string): Promise<R2Object[]> {
+    const listed = await this.bucket.list({ prefix });
+    return listed.objects;
+  }
+  
+  async getUrl(key: string, signed = false): Promise<string> {
+    if (signed) {
+      // Generate signed URL
+      const signed = await this.bucket.createSignedUrl({
+        key,
+        expiresIn: 3600
+      });
+      return signed.url;
+    }
+    
+    return `${process.env.R2_PUBLIC_URL}/${key}`;
+  }
+}
+```
+
+#### KV Caching Adapter
+
+```
+// shared/lib/kv-adapter.ts
+export class KVCache {
+  constructor(private kv: KVNamespace) {}
+  
+  async get<T>(key: string): Promise<T | null> {
+    const cached = await this.kv.get(key, 'json');
+    return cached;
+  }
+  
+  async set(key: string, value: any, ttl?: number): Promise<void> {
+    const options = ttl ? { expirationTtl: ttl } : {};
+    await this.kv.put(key, JSON.stringify(value), options);
+  }
+  
+  async delete(key: string): Promise<void> {
+    await this.kv.delete(key);
+  }
+  
+  async invalidatePattern(pattern: string): Promise<void> {
+    // KV doesn't support pattern deletion
+    // Maintain a list of cache keys
+    const keys = await this.kv.get(`cache:${pattern}`, 'json');
+    if (keys) {
+      await this.kv.delete(keys);
+      await this.kv.delete(`cache:${pattern}`);
+    }
+  }
+  
+  async cache<T>(
+    key: string,
+    fn: () => Promise<T>,
+    ttl: number = 300
+  ): Promise<T> {
+    const cached = await this.get<T>(key);
+    if (cached) return cached;
+    
+    const result = await fn();
+    await this.set(key, result, ttl);
+    return result;
+  }
+}
+```
+
+### 4. Dynamic Routing (Content Type Aware)
+
+```
+// Dynamic route handler for content types
+app.get('/dynamic/:contentType/:slug', async (c) => {
+  const { contentType, slug } = c.req.param();
+  const contentItem = await db.query(
+    `SELECT * FROM content_items WHERE slug = ? AND content_type_id = ? AND status = 'published'`,
+    [slug, contentType]
+  );
+  
+  if (!contentItem) {
+    return c.notFound();
+  }
+  
+  const contentTypeDef = await getContentTypeDefinition(contentType);
+  
+  // Render with appropriate template
+  return c.render('dynamic-single', {
+    item: contentItem,
+    contentType: contentTypeDef
+  });
+});
+
+app.get('/dynamic/:contentType', async (c) => {
+  const { contentType } = c.req.param();
+  const page = parseInt(c.req.query('page') || '1');
+  const limit = 20;
+  const offset = (page - 1) * limit;
+  
+  const items = await db.query(
+    `SELECT * FROM content_items 
+     WHERE content_type_id = ? AND status = 'published'
+     ORDER BY published_at DESC
+     LIMIT ? OFFSET ?`,
+    [contentType, limit, offset]
+  );
+  
+  const contentTypeDef = await getContentTypeDefinition(contentType);
+  
+  // Render with archive template
+  return c.render('dynamic-archive', {
+    items,
+    contentType: contentTypeDef,
+    pagination: { page, totalPages: Math.ceil(count / limit) }
+  });
+});
+```
+
+---
+
+## 🛠️ Module Structure (Content-Type-Aware)
+
+### Content Type Module Example: `packages/modules-jobs/`
+
+```
+packages/modules-jobs/
+├── src/
+│   ├── content-types/
+│   │   ├── job-listing.ts       # Content type definition
+│   │   └── index.ts
+│   ├── components/
+│   │   ├── JobsDashboard.tsx      # Admin: Job listings manager
+│   │   ├── JobEditor.tsx          # Admin: Edit job (dynamic form)
+│   │   ├── JobCard.tsx           # Frontend: Job display card
+│   │   ├── JobFilters.tsx         # Frontend: Filter sidebar
+│   │   └── index.ts
+│   ├── api.ts                      # CRUD endpoints for jobs
+│   ├── storage.ts                  # D1 operations
+│   ├── module.ts                   # Module metadata
+│   └── index.ts
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+### Module Content Type Registration
+
+```
+// packages/modules-jobs/src/content-types/job-listing.ts
+export const JobListingsContentType: ContentTypeDefinition = {
+  id: 'job-listing',
+  name: 'Job Listings',
+  // ... full definition (see example above)
+  moduleId: 'modules-jobs'
+};
+
+// packages/modules-jobs/src/index.ts
+export * from './content-types/job-listing';
+export { getRoutes } from './api';
+export { JobDashboard, JobEditor, JobCard, JobFilters } from './components';
+export const JobsModule: ModuleDefinition = {
+  id: 'jobs',
+  name: 'Jobs',
+  version: '1.0.0',
+  description: 'Job listings and career board',
+  category: 'business',
+  icon: Briefcase,
+  
+  sidebar: {
+    label: 'Jobs',
+    to: '/admin/jobs',
+    priority: 80
+  },
+  
+  component: () => import('./components/JobsDashboard'),
+  
+  // Register content types
+  contentTypes: [
+    JobListingsContentType
+  ],
+  
+  settings: {
+    component: () => import('./components/JobsSettings'),
+    title: 'Jobs Settings',
+  },
+  
+  defaultConfig: {
+    enableApplications: true,
+    autoExpireDays: 30,
+  }
+};
+```
+
+### Dynamic Form Generation (The Magic)
+
+```
+// packages/modules-content-types/src/components/FieldRenderer.tsx
+export const FieldRenderer: React.FC<{
+  field: FieldDefinition;
+  value: any;
+  onChange: (value: any) => void;
+  error?: string;
+}> = ({ field, value, onChange, error }) => {
+  switch (field.type) {
+    case 'text':
+      return (
+        <Input
+          id={field.id}
+          value={value || ''}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={field.placeholder}
+          required={field.required}
+          className={error ? 'border-red-500' : ''}
+        />
+      );
+    
+    case 'textarea':
+      return (
+        <Textarea
+          id={field.id}
+          value={value || ''}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={field.placeholder}
+          rows={5}
+          required={field.required}
+        />
+      );
+    
+    case 'editor':
+      return (
+        <TiptapEditor
+          id={field.id}
+          content={value || ''}
+          onChange={onChange}
+          placeholder={field.placeholder}
+        />
+      );
+    
+    case 'select':
+      return (
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger>
+            <SelectValue placeholder={field.placeholder} />
+          </SelectTrigger>
+          <SelectContent>
+            {field.options?.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.icon && <opt.icon className="mr-2 h-4 w-4" />}
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      );
+    
+    case 'multiselect':
+      return (
+        <MultiSelect
+          options={field.options || []}
+          value={value || []}
+          onChange={onChange}
+          placeholder={field.placeholder}
+        />
+      );
+    
+    case 'toggle':
+      return (
+        <Switch
+          id={field.id}
+          checked={value || false}
+          onCheckedChange={onChange}
+        />
+      );
+    
+    case 'date':
+      return (
+        <DatePicker
+          value={value ? new Date(value) : undefined}
+          onChange={(date) => onChange(date?.toISOString())}
+        />
+      );
+    
+    case 'file':
+      return (
+        <FileUpload
+          value={value}
+          onChange={onChange}
+          accept="image/*,.pdf"
+          maxSize={10485760}
+        />
+      );
+    
+    case 'image':
+      return (
+        <ImageUpload
+          value={value}
+          onChange={onChange}
+          aspectRatio="16:9"
+        />
+      );
+    
+    case 'relationship':
+      return (
+        <RelationshipField
+          contentTypeId={field.relationshipTo}
+          value={value}
+          onChange={onChange}
+          multiple={field.relationshipType === 'many-to-many'}
+        />
+      );
+    
+    case 'taxonomy':
+      return (
+        <TaxonomySelector
+          taxonomyId={field.id}
+          value={value}
+          onChange={onChange}
+          multiple={field.type === 'multiselect'}
+        />
+      );
+    
+    default:
+      return <div>Unknown field type: {field.type}</div>;
+  }
+};
+```
+
+---
+
+## 🚀 Development Workflow
+
+### Local Development (Workers Only)
+
+```
+# Start with local D1 (fastest for development)
+wrangler dev --local --port 3001
+
+# Start with remote D1 (for production-like testing)
+wrangler dev --port 3001
+
+# Start frontend in separate terminal
+cd web
+npm run dev
+```
+
+### Database Migrations
+
+```
+# Create D1 database (one-time)
+wrangler d1 create reactpress-db
+
+# Add database_id to wrangler.toml
+
+# Create migration file
+# db/migrations/001_initial.sql
+
+# Run migrations
+wrangler d1 migrations apply reactpress-db --remote
+
+# Or for local
+wrangler d1 migrations apply reactpress-db --local
+
+# Execute custom SQL
+wrangler d1 execute reactpress-db --command="SELECT * FROM content_types"
+```
+
+### Creating a New Content Type
+
+```
+# Use interactive CLI (recommended)
+npm run create:content-type
+
+# Manual steps:
+# 1. Create module
+npm run create:module
+
+# 2. Define content type in module/src/content-types/
+touch packages/modules-mytype/src/content-types/my-type.ts
+
+# 3. Implement components for rendering
+touch packages/modules-mytype/src/components/MyTypeCard.tsx
+
+# 4. Register in module.ts
+```
+
+### Creating a New Module (Content-Type-Enabled)
+
+```
+npm run create:module
+
+# Follow prompts:
+# - Module name: my-business-directory
+# - Category: business
+# - Does this module provide content types? Yes
+# - Content type IDs: business-listing
+# - Content type names: Business Listings, Business
+```
+
+---
+
+## 🎨 Intuitive Page Builder (Enhanced)
+
+### Block Builder Integration
+
+```
+// Each content type can define available blocks
+interface ContentTypeDefinition {
+  // ... other properties
+  availableBlocks?: BlockDefinition[];  // Content-type-specific blocks
+}
+
+// Example: Job listings might have:
+availableBlocks: [
+  { id: 'company-logo', name: 'Company Logo', type: 'image' },
+  { id: 'job-details', name: 'Job Details', type: 'dynamic-form' },
+  { id: 'apply-button', name: 'Apply Button', type: 'cta' },
+  { id: 'similar-jobs', name: 'Similar Jobs', type: 'query' }
+]
+```
+
+### Page Builder UI
+
+- **Drag-and-Drop Blocks**: Intuitive visual editor
+- **Block Library**: Organized by category (content, layout, media, advanced)
+- **Live Preview**: Real-time preview of page
+- **Content Type Aware**: Blocks show relevant fields from content type
+- **Reusable Templates**: Save and load page templates per content type
+
+---
+
+## 🔒 Stability & Scalability Improvements
+
+### 1. Type-Safe API Contracts
+
+```
+// shared/types/api.ts
+import { z } from 'zod';
+
+export const CreateContentItemSchema = z.object({
+  content_type_id: z.string(),
+  tenant_id: z.string(),
+  title: z.string().min(1).max(200),
+  slug: z.string().regex(/^[a-z0-9-]+$/),
+  content: z.record(z.any()),
+  status: z.enum(['draft', 'published', 'archived']),
+  // ... dynamic fields validated at runtime
+});
+
+export type CreateContentItemInput = z.infer<typeof CreateContentItemSchema>;
+
+// API endpoint
+app.post('/api/content-items', async (c) => {
+  const body = await c.req.json();
+  const validated = CreateContentItemSchema.parse(body);
+  // ... handle validated data
+});
+```
+
+### 2. Structured Logging
+
+```
+// shared/lib/logger.ts
+export class Logger {
+  constructor(private context: string) {}
+  
+  info(message: string, meta?: any) {
+    console.log(JSON.stringify({
+      level: 'info',
+      context: this.context,
+      message,
+      meta,
+      timestamp: Date.now(),
+      correlationId: this.getCorrelationId()
+    }));
+  }
+  
+  error(message: string, error?: Error) {
+    console.error(JSON.stringify({
+      level: 'error',
+      context: this.context,
+      message,
+      error: error?.stack,
+      timestamp: Date.now()
+    }));
+  }
+  
+  private getCorrelationId(): string {
+    // Use Workers request ID or generate
+    return crypto.randomUUID();
+  }
+}
+
+// Usage
+const logger = new Logger('content-api');
+logger.info('Creating content item', { contentTypeId });
+```
+
+### 3. Error Boundaries
+
+```
+// web/src/components/ErrorBoundary.tsx
+export class ContentErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback?: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+  
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true };
+  }
+  
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    logger.error('Content error boundary triggered', error);
+  }
+  
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback || <ContentErrorFallback />;
+    }
+    return this.props.children;
+  }
+}
+```
+
+### 4. Performance Monitoring
+
+```
+// shared/lib/monitoring.ts
+export class PerformanceMonitor {
+  static async measure<T>(
+    name: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const start = performance.now();
+    try {
+      return await fn();
+    } finally {
+      const duration = performance.now() - start;
+      logger.info('Performance metric', { name, duration });
+      
+      // Send to analytics
+      if (duration > 1000) {
+        logger.warn('Slow operation detected', { name, duration });
+      }
+    }
+  }
+}
+
+// Usage
+const result = await PerformanceMonitor.measure(
+  'fetch-content-items',
+  () => db.query('SELECT * FROM content_items')
+);
+```
+
+### 5. Caching Strategy
+
+```
+// Cache content type definitions (rarely change)
+app.get('/api/content-types', async (c) => {
+  const cache = new KVCache(c.env.CACHE);
+  
+  return await cache.cache(
+    `content-types:${tenantId}`,
+    async () => {
+      const types = await db.query('SELECT * FROM content_types');
+      return c.json(types);
+    },
+    3600 // 1 hour cache
+  );
+});
+
+// Cache frequently accessed content
+app.get('/api/content-items/:id', async (c) => {
+  const { id } = c.req.param();
+  const cache = new KVCache(c.env.CACHE);
+  
+  return await cache.cache(
+    `content-item:${id}`,
+    async () => {
+      const item = await db.query(
+        'SELECT * FROM content_items WHERE id = ?',
+        [id]
+      );
+      return c.json(item);
+    },
+    300 // 5 minute cache
+  );
+});
+```
+
+### 6. Rate Limiting
+
+```
+// backend/src/middleware/rateLimit.ts
+export async function rateLimitMiddleware(
+  c: any,
+  next: Next
+) {
+  const identifier = c.req.header('cf-connecting-ip') || 'anonymous';
+  const cache = new KVCache(c.env.CACHE);
+  
+  const key = `ratelimit:${identifier}:${c.req.path}`;
+  const limit = 100; // 100 requests
+  const window = 60 * 1000; // 60 seconds
+  
+  const current = await cache.get<number>(key) || 0;
+  
+  if (current >= limit) {
+    return c.json(
+      { error: 'Too many requests' },
+      { status: 429 }
+    );
+  }
+  
+  await cache.set(key, current + 1, window);
+  await next();
+}
+```
+
+### 7. API Versioning
+
+```
+// Versioned routes from start
+app.route('/api/v1', v1Routes);
+app.route('/api/v2', v2Routes);
+
+// Future-proofing
+app.get('/api/v2/content-items', async (c) => {
+  // V2 implementation
+});
+```
+
+---
+
+## 📚 Building Content-Driven Apps
+
+### Example: Creating a Tool Directory
+
+```
+# 1. Generate module
+npm run create:module
+# Name: tools
+# Category: business
+
+# 2. Define content type
+# packages/modules-tools/src/content-types/tool-listing.ts
+export const ToolListingsContentType: ContentTypeDefinition = {
+  id: 'tool-listing',
+  name: 'Tool Listings',
+  singular: 'Tool',
+  plural: 'Tools',
+  icon: Wrench,
+  
+  fields: [
+    {
+      id: 'name',
+      name: 'Tool Name',
+      type: 'text',
+      required: true
+    },
+    {
+      id: 'url',
+      name: 'Website URL',
+      type: 'url',
+      required: true
+    },
+    {
+      id: 'category',
+      name: 'Category',
+      type: 'select',
+      required: true,
+      options: [
+        { value: 'productivity', label: 'Productivity' },
+        { value: 'design', label: 'Design' },
+        { value: 'development', label: 'Development' },
+        { value: 'marketing', label: 'Marketing' },
+      ]
+    },
+    {
+      id: 'pricing',
+      name: 'Pricing Model',
+      type: 'select',
+      options: [
+        { value: 'free', label: 'Free' },
+        { value: 'freemium', label: 'Freemium' },
+        { value: 'paid', label: 'Paid' },
+      ]
+    },
+    {
+      id: 'description',
+      name: 'Description',
+      type: 'editor',
+      required: true
+    },
+    {
+      id: 'screenshot',
+      name: 'Screenshot',
+      type: 'image'
+    },
+    {
+      id: 'rating',
+      name: 'Rating (1-5)',
+      type: 'rating'
+    }
+  ],
+  
+  taxonomies: [
+    {
+      id: 'tool-tag',
+      name: 'Tags',
+      singular: 'Tag',
+      plural: 'Tags',
+      hierarchical: false,
+      icon: Tag
+    }
+  ],
+  
+  routing: {
+    basePath: '/tools',
+    hasArchive: true,
+    hasSingle: true,
+    slugSource: 'title'
+  },
+  
+  ui: {
+    listView: 'grid',
+    enableFeatured: true,
+    enableFeaturedImage: true
+  },
+  
+  moduleId: 'modules-tools'
+};
+
+# 3. Done! Admin UI auto-generates, routes auto-generate
+```
+
+### Example: Creating a Law Library
+
+```
+# Similar process
+npm run create:module
+
+# Define content type with fields like:
+# - statute_number, jurisdiction, effective_date
+# - full_text (editor), summary
+# - related_statutes (relationship)
+# - practice_area (taxonomy)
+
+# Done! Full CRUD, filtering, search ready
+```
+
+---
+
+## 🎯 Final Implementation Checklist
+
+### Phase 1: Cloudflare-Native Foundation
+
+- [ ]  Remove all Node.js/file-system code
+- [ ]  Setup D1 database with migrations system
+- [ ]  Setup R2 storage adapter
+- [ ]  Setup KV cache adapter
+- [ ]  Configure Wrangler for both local and remote D1
+- [ ]  Workers-only runtime environment
+
+### Phase 2: Content Type System
+
+- [ ]  Implement content_types schema
+- [ ]  Implement content_items unified table
+- [ ]  Implement taxonomies and terms tables
+- [ ]  Create ContentTypeRegistry
+- [ ]  Build ContentTypeManager admin UI
+- [ ]  Build ContentTypeEditor admin UI
+- [ ]  Build FieldRenderer component (all 20+ field types)
+- [ ]  Build ContentItemManager (dynamic list)
+- [ ]  Build ContentItemEditor (dynamic form)
+
+### Phase 3: Module System
+
+- [ ]  Module system with content type registration
+- [ ]  Dynamic routing for content types
+- [ ]  Module loading in Workers environment
+- [ ]  Auto-discovery of content types
+
+### Phase 4: Example Content Types
+
+- [ ]  Blog/Articles CMS (built-in)
+- [ ]  Job Listings module (example)
+- [ ]  Business Directory module (example)
+- [ ]  Law Statutes module (example)
+- [ ]  Tools Directory module (example)
+
+### Phase 5: Production Readiness
+
+- [ ]  Comprehensive error handling
+- [ ]  Structured logging
+- [ ]  Performance monitoring
+- [ ]  Rate limiting per tenant
+- [ ]  API versioning
+- [ ]  SEO optimization (sitemaps, RSS)
+- [ ]  Security headers
+- [ ]  Backup strategy
+
+---
+
+## �️ Codebase Stability & Consistency Guidelines
+
+### 1. Coding Standards (MANDATORY)
+
+All code contributions MUST adhere to these standards:
+
+```
+// TypeScript Configuration (tsconfig.json)
+{
+  "compilerOptions": {
+    "strict": true,                      // ALWAYS enabled
+    "noImplicitAny": true,               // No implicit any
+    "strictNullChecks": true,            // Null safety
+    "noUnusedLocals": true,              // Clean code
+    "noUnusedParameters": true,          // Clean signatures
+    "noImplicitReturns": true,           // Explicit returns
+    "noFallthroughCasesInSwitch": true,  // Safe switches
+    "exactOptionalPropertyTypes": true,  // Precise optionals
+    "forceConsistentCasingInFileNames": true
+  }
+}
+```
+
+#### File/Folder Naming Conventions
+
+| Type | Convention | Example |
+|------|------------|---------|
+| React Components | PascalCase | `ContentTypeEditor.tsx` |
+| Hooks | camelCase with `use` prefix | `useContentTypes.ts` |
+| Utilities | camelCase | `formatDate.ts` |
+| Constants | SCREAMING_SNAKE_CASE | `API_ENDPOINTS.ts` |
+| Types/Interfaces | PascalCase with suffix | `ContentTypeDefinition.ts` |
+| API Routes | kebab-case | `content-items.ts` |
+| Database Migrations | Numbered prefix | `001_initial.sql` |
+
+#### Import Order (Enforced by ESLint)
+
+```typescript
+// 1. React/Framework imports
+import React, { useState, useEffect } from 'react';
+import { Hono } from 'hono';
+
+// 2. External packages (alphabetical)
+import { z } from 'zod';
+
+// 3. Internal packages (@reactpress/*)
+import { Logger } from '@reactpress/shared';
+import type { ContentType } from '@reactpress/shared-types';
+
+// 4. Relative imports (parent first, then siblings)
+import { ContentManager } from '../components';
+import { formatSlug } from './utils';
+
+// 5. Type-only imports (at the end)
+import type { FC, ReactNode } from 'react';
+```
+
+### 2. Testing Requirements (MANDATORY)
+
+**NO code changes without corresponding tests.**
+
+```
+Test Coverage Requirements:
+├── Unit Tests (packages/*)           ≥ 80% coverage
+├── Integration Tests (backend/*)    ≥ 70% coverage
+├── Component Tests (web/*)          ≥ 70% coverage
+└── E2E Tests (critical paths)       100% of user flows
+```
+
+#### Test Structure
+
+```typescript
+// Unit test example (Vitest)
+describe('ContentTypeValidator', () => {
+  it('should reject content types without required fields', () => {
+    const invalidType = { id: 'test' }; // Missing name, fields
+    expect(() => validateContentType(invalidType)).toThrow();
+  });
+
+  it('should accept valid content type definitions', () => {
+    const validType = createValidContentType();
+    expect(() => validateContentType(validType)).not.toThrow();
+  });
+});
+
+// Integration test example
+describe('Content Items API', () => {
+  beforeEach(async () => {
+    await resetTestDatabase();
+  });
+
+  it('should create content item with valid data', async () => {
+    const response = await app.request('/api/v1/content-items', {
+      method: 'POST',
+      body: JSON.stringify(validContentItem),
+    });
+    expect(response.status).toBe(201);
+  });
+});
+```
+
+#### Before Every PR/Merge
+
+```bash
+# All must pass
+npm run lint          # ESLint + Prettier
+npm run typecheck     # TypeScript strict mode
+npm run test          # Unit + integration tests
+npm run build         # Production build check
+```
+
+### 3. Dependency Management (CRITICAL)
+
+**All packages MUST use harmonized dependency versions.**
+
+```
+// Root package.json - Dependency Version Registry
+{
+  "dependencyVersions": {
+    "react": "19.2.3",
+    "hono": "4.7.10", 
+    "drizzle-orm": "0.45.1",
+    "zod": "4.2.1",
+    "typescript": "5.8.3",
+    "@tanstack/react-router": "1.121.0",
+    "@tanstack/react-query": "5.80.6"
+  }
+}
+```
+
+#### Rules for Dependency Changes
+
+1. **New dependencies**: Must be added via `scripts/add-dependency.js` (creates harmonized entry)
+2. **Version updates**: Run `npm run harmonize-deps` after any version change
+3. **Peer dependencies**: Must match root versions exactly
+4. **Never use `^` or `~`**: Always pin exact versions
+
+```bash
+# Adding a new dependency (correct way)
+npm run add-dep -- lodash 4.17.21
+
+# Harmonize all packages after any change
+npm run harmonize-deps
+
+# Verify no version mismatches
+npm run check-deps
+```
+
+### 4. Error Handling Patterns (MANDATORY)
+
+**All code must follow these error handling patterns:**
+
+#### Backend (Hono API)
+
+```typescript
+// ✅ CORRECT: Structured error responses
+app.post('/api/content-items', async (c) => {
+  try {
+    const body = await c.req.json();
+    const validated = CreateContentItemSchema.safeParse(body);
+    
+    if (!validated.success) {
+      return c.json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid input data',
+          details: validated.error.flatten(),
+        }
+      }, 400);
+    }
+    
+    const result = await createContentItem(validated.data);
+    return c.json({ success: true, data: result }, 201);
+    
+  } catch (error) {
+    logger.error('Failed to create content item', error);
+    return c.json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'An unexpected error occurred',
+        requestId: c.get('requestId'),
+      }
+    }, 500);
+  }
+});
+
+// ❌ WRONG: Throwing raw errors, no structure
+app.post('/api/content-items', async (c) => {
+  const body = await c.req.json();
+  const item = await createContentItem(body); // No validation!
+  return c.json(item); // No success wrapper!
+});
+```
+
+#### Frontend (React/TanStack Query)
+
+```typescript
+// ✅ CORRECT: Proper error boundaries and fallbacks
+export const ContentItemPage: FC = () => {
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['content-item', id],
+    queryFn: () => fetchContentItem(id),
+    retry: 3,
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+  });
+
+  if (isLoading) return <ContentItemSkeleton />;
+  if (isError) return <ContentItemError error={error} onRetry={refetch} />;
+  if (!data) return <ContentItemNotFound />;
+  
+  return <ContentItemView data={data} />;
+};
+
+// Wrap with error boundary at page level
+<ContentErrorBoundary fallback={<ContentPageError />}>
+  <ContentItemPage />
+</ContentErrorBoundary>
+```
+
+### 5. Database Migration Safety (CRITICAL)
+
+**All migrations must be forward-compatible and reversible.**
+
+```sql
+-- ✅ CORRECT: Safe migration with rollback plan
+-- migrations/015_add_content_status.sql
+
+-- Forward migration
+ALTER TABLE content_items ADD COLUMN status_new TEXT DEFAULT 'draft';
+UPDATE content_items SET status_new = status WHERE status_new IS NULL;
+
+-- ROLLBACK COMMENT (for reference):
+-- ALTER TABLE content_items DROP COLUMN status_new;
+
+-- ❌ WRONG: Destructive, non-reversible
+-- DROP TABLE content_items;
+-- DELETE FROM content_items WHERE ...;
+```
+
+#### Migration Checklist
+
+- [ ] Migration has a corresponding rollback script
+- [ ] Migration is idempotent (safe to run multiple times)
+- [ ] Migration handles existing data correctly
+- [ ] Migration is tested on a copy of production data
+- [ ] Migration has a descriptive name matching schema changes
+
+### 6. Type Safety Requirements (MANDATORY)
+
+**No `any` types. No type assertions without guards.**
+
+```typescript
+// ✅ CORRECT: Proper type guards
+function isContentItem(obj: unknown): obj is ContentItem {
+  return (
+    typeof obj === 'object' &&
+    obj !== null &&
+    'id' in obj &&
+    'content_type_id' in obj &&
+    typeof (obj as ContentItem).id === 'string'
+  );
+}
+
+// Use with unknown data
+const data = await c.req.json();
+if (isContentItem(data)) {
+  // TypeScript knows data is ContentItem here
+  processContentItem(data);
+}
+
+// ✅ CORRECT: Zod for runtime validation
+const ContentItemSchema = z.object({
+  id: z.string().uuid(),
+  content_type_id: z.string(),
+  title: z.string().min(1).max(200),
+  status: z.enum(['draft', 'published', 'archived']),
+});
+
+type ContentItem = z.infer<typeof ContentItemSchema>;
+
+// ❌ WRONG: Using 'any' or unsafe casts
+const item = data as any; // NEVER do this
+const item2 = data as ContentItem; // Only after validation
+```
+
+### 7. API Contract Stability (MANDATORY)
+
+**APIs must be versioned and backward compatible.**
+
+```typescript
+// Version all API endpoints
+const v1Routes = new Hono();
+const v2Routes = new Hono();
+
+app.route('/api/v1', v1Routes);
+app.route('/api/v2', v2Routes);
+
+// Deprecation policy
+// - Announce deprecation 3 months before removal
+// - Add X-Deprecated header to deprecated endpoints
+// - Document migration path in response body
+
+v1Routes.get('/content-items', async (c) => {
+  c.header('X-Deprecated', 'true');
+  c.header('X-Sunset', '2026-06-01');
+  // ... handler with deprecation notice in docs
+});
+```
+
+### 8. Shared Code Requirements
+
+**All shared code must live in appropriate packages:**
+
+```
+Package Usage:
+├── @reactpress/shared-types    → Type definitions ONLY (no runtime code)
+├── @reactpress/shared          → Shared utilities, adapters, helpers
+├── @reactpress/config          → Configuration schemas and registries
+└── packages/modules-*          → Feature-specific code
+
+Rules:
+1. Types go in shared-types (zero runtime dependencies)
+2. Utilities used by 2+ packages go in shared
+3. Module-specific code stays in its module
+4. Never import from backend in web (or vice versa)
+5. Circular dependencies are FORBIDDEN
+```
+
+### 9. Pre-Commit Hooks (ENFORCED)
+
+```json
+// package.json
+{
+  "scripts": {
+    "prepare": "husky install"
+  }
+}
+
+// .husky/pre-commit
+#!/bin/sh
+npm run lint-staged
+
+// lint-staged.config.js
+module.exports = {
+  '*.{ts,tsx}': ['eslint --fix', 'prettier --write'],
+  '*.{json,md}': ['prettier --write'],
+  '*.sql': ['sql-formatter --fix'],
+};
+
+// .husky/pre-push  
+#!/bin/sh
+npm run typecheck
+npm run test
+```
+
+### 10. CI/CD Quality Gates (BLOCKING)
+
+```yaml
+# All must pass before merge:
+jobs:
+  quality:
+    steps:
+      - name: Lint Check
+        run: npm run lint
+        
+      - name: Type Check  
+        run: npm run typecheck
+        
+      - name: Unit Tests
+        run: npm run test:unit --coverage
+        
+      - name: Integration Tests
+        run: npm run test:integration
+        
+      - name: Build Check
+        run: npm run build
+        
+      - name: Bundle Size Check
+        run: npm run check-bundle-size
+        
+      - name: Dependency Audit
+        run: npm audit --audit-level=high
+```
+
+### 11. Code Review Requirements
+
+**All PRs must:**
+
+- [ ] Pass all CI checks
+- [ ] Have at least 1 approval
+- [ ] Have no unresolved comments
+- [ ] Follow commit message convention (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`)
+- [ ] Not introduce new `any` types
+- [ ] Include tests for new functionality
+- [ ] Update documentation if API changes
+- [ ] Not decrease test coverage
+
+### 12. Breaking Change Protocol
+
+When making breaking changes:
+
+1. **Document** in CHANGELOG.md with `BREAKING:` prefix
+2. **Bump** major version in affected packages
+3. **Provide** migration guide for affected APIs
+4. **Announce** in PR title with `[BREAKING]` prefix
+5. **Update** all internal usages before merge
+
+---
+
+## �🔑 Key Principles Summary
+
+1. **Cloudflare-Native Only**: Workers, D1, R2, KV - no filesystem, no Node.js
+2. **Content-Type-First**: WordPress-like extensibility with zero code for new content types
+3. **Type-Safe**: Zod validation everywhere, strict TypeScript
+4. **Auto-Discovery**: Content types and modules auto-discovered
+5. **Consistent**: Single runtime for all environments
+6. **Scalable**: Caching, rate limiting, monitoring built-in
+7. **Reusable**: Modules can share fields, taxonomies, blocks
+8. **Stable**: Error boundaries, structured logging, migrations
+
+---
+
+## 🎓 How to Build on Top of This
+
+### To Create ANY Content-Driven App:
+
+1. **Run generator**: `npm run create:module`
+2. **Define content type**: Fields, taxonomies, routing, UI config
+3. **Done!** Admin UI, API, routing, search all auto-generated
+
+**That's it.** No need to:
+
+- Build CRUD forms
+- Create database tables manually
+- Write API endpoints
+- Implement routing
+- Build filtering/search
+- Handle file uploads
+
+**All auto-generated from content type definition.**
+
+This is the power of Content-Type-First Architecture.

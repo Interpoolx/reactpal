@@ -623,6 +623,7 @@ SELECT * FROM content_items WHERE tenant_id = ? AND status = 'published';
 SELECT * FROM content_items WHERE status = 'published'; -- DANGEROUS!
 ```
 
+
 ### 9. Tenant Module Assignment API
 
 ```typescript

@@ -38,11 +38,14 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
                 const initial = found || data[0] || null;
                 setActiveTenantState(initial);
 
-                // Sync URL if missing or mismatch
-                if (initial && urlTenant !== initial.id) {
-                    const newUrl = new URL(window.location.href);
-                    newUrl.searchParams.set('tenant', initial.id);
-                    window.history.replaceState({}, '', newUrl);
+                // Sync URL if missing or mismatch (Using domain/slug for readability)
+                if (initial) {
+                    const identifier = initial.domain || initial.slug || initial.id;
+                    if (urlTenant !== identifier) {
+                        const newUrl = new URL(window.location.href);
+                        newUrl.searchParams.set('tenant', identifier);
+                        window.history.replaceState({}, '', newUrl);
+                    }
                 }
 
                 setIsLoading(false);
@@ -57,9 +60,10 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
         setActiveTenantState(tenant);
         localStorage.setItem('rp_active_tenant', tenant.id);
 
-        // Update URL
+        // Update URL to a readable identifier
+        const identifier = tenant.domain || tenant.slug || tenant.id;
         const newUrl = new URL(window.location.href);
-        newUrl.searchParams.set('tenant', tenant.id);
+        newUrl.searchParams.set('tenant', identifier);
         window.history.pushState({}, '', newUrl);
     };
 

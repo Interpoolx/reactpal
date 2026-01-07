@@ -2145,31 +2145,44 @@ var cors = /* @__PURE__ */ __name((options) => {
 async function tenantResolverMiddleware(c, next) {
   const host = c.req.header("host") || "";
   const domain = host.split(":")[0];
-  const queryTenantId = c.req.query("tenantId");
-  if (queryTenantId) {
-    c.set("tenantId", queryTenantId);
+  const queryId = c.req.query("tenant") || c.req.query("tenantId");
+  let tenant = null;
+  if (queryId) {
+    const db = c.env.DB;
+    const result = await db.prepare(`
+            SELECT t.* FROM tenants t
+            LEFT JOIN tenant_domains td ON t.id = td.tenant_id
+            WHERE t.id = ? OR t.slug = ? OR td.domain = ?
+            LIMIT 1
+        `).bind(queryId, queryId, queryId).first();
+    if (result) {
+      tenant = {
+        ...result,
+        config: typeof result.config === "string" ? JSON.parse(result.config) : result.config
+      };
+    }
   } else {
     const kv = c.env.TENANT_MANIFESTS;
-    let tenant = await kv.get(`tenant:${domain}`, { type: "json" });
+    tenant = await kv.get(`tenant:${domain}`, { type: "json" });
     if (!tenant) {
       const db = c.env.DB;
       const result = await db.prepare(`
-        SELECT t.* FROM tenants t
-        JOIN tenant_domains td ON t.id = td.tenant_id
-        WHERE td.domain = ?
-      `).bind(domain).first();
+                SELECT t.* FROM tenants t
+                JOIN tenant_domains td ON t.id = td.tenant_id
+                WHERE td.domain = ?
+            `).bind(domain).first();
       if (result) {
         tenant = {
           ...result,
-          config: JSON.parse(result.config)
+          config: typeof result.config === "string" ? JSON.parse(result.config) : result.config
         };
         await kv.put(`tenant:${domain}`, JSON.stringify(tenant));
       }
     }
-    if (tenant) {
-      c.set("tenant", tenant);
-      c.set("tenantId", tenant.id);
-    }
+  }
+  if (tenant) {
+    c.set("tenant", tenant);
+    c.set("tenantId", tenant.id);
   }
   if (!c.get("tenantId")) {
     c.set("tenantId", "default");

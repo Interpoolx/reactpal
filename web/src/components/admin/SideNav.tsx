@@ -10,7 +10,8 @@ const MENU_ITEMS = [
 
 export function SideNav() {
     const { activeTenant } = useTenant();
-    const query = activeTenant ? `?tenant=${activeTenant.id}` : '';
+    const identifier = activeTenant?.domain || activeTenant?.slug || activeTenant?.id;
+    const query = identifier ? `?tenant=${identifier}` : '';
 
     return (
         <aside className="w-64 h-screen border-r border-border-muted bg-darker flex flex-col">

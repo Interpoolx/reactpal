@@ -4,41 +4,53 @@ export async function tenantResolverMiddleware(c: Context, next: Next) {
     const host = c.req.header('host') || '';
     const domain = host.split(':')[0]; // Remove port
 
-    // 1. Try to resolve via ?tenantId=... parameter (Manual Override / Debug)
-    const queryTenantId = c.req.query('tenantId');
-    if (queryTenantId) {
-        c.set('tenantId', queryTenantId);
-        // Ideally fetch full tenant meta here if needed
+    // 1. Try to resolve via ?tenant=... or ?tenantId=... parameter (Manual Override / Debug)
+    const queryId = c.req.query('tenant') || c.req.query('tenantId');
+    let tenant: any = null;
+
+    if (queryId) {
+        const db = c.env.DB;
+        const result = await db.prepare(`
+            SELECT t.* FROM tenants t
+            LEFT JOIN tenant_domains td ON t.id = td.tenant_id
+            WHERE t.id = ? OR t.slug = ? OR td.domain = ?
+            LIMIT 1
+        `).bind(queryId, queryId, queryId).first();
+
+        if (result) {
+            tenant = {
+                ...result,
+                config: typeof result.config === 'string' ? JSON.parse(result.config) : result.config
+            };
+        }
     } else {
         // 2. Resolve via Domain -> KV Manifest (Edge Performance)
-        // For Phase 1, if KV isn't populated, we'll fallback to D1
         const kv = c.env.TENANT_MANIFESTS;
-        let tenant = await kv.get(`tenant:${domain}`, { type: 'json' }) as any;
+        tenant = await kv.get(`tenant:${domain}`, { type: 'json' }) as any;
 
         if (!tenant) {
             // 3. Fallback to D1 Database
-            // Note: In a real implementation, we'd use the repository here
             const db = c.env.DB;
             const result = await db.prepare(`
-        SELECT t.* FROM tenants t
-        JOIN tenant_domains td ON t.id = td.tenant_id
-        WHERE td.domain = ?
-      `).bind(domain).first();
+                SELECT t.* FROM tenants t
+                JOIN tenant_domains td ON t.id = td.tenant_id
+                WHERE td.domain = ?
+            `).bind(domain).first();
 
             if (result) {
                 tenant = {
                     ...result,
-                    config: JSON.parse(result.config as string)
+                    config: typeof result.config === 'string' ? JSON.parse(result.config) : result.config
                 };
-                // Auto-populate KV for subsequent requests
+                // Auto-populate KV
                 await kv.put(`tenant:${domain}`, JSON.stringify(tenant));
             }
         }
+    }
 
-        if (tenant) {
-            c.set('tenant', tenant);
-            c.set('tenantId', tenant.id);
-        }
+    if (tenant) {
+        c.set('tenant', tenant);
+        c.set('tenantId', tenant.id);
     }
 
     // 4. Fallback to Default Tenant

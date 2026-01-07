@@ -5,6 +5,7 @@
     "scripts": {
         "dev": "wrangler dev",
         "deploy": "wrangler deploy",
+        "build": "echo 'Build handled by wrangler during deployment'",
         "db:push": "drizzle-kit push",
         "db:generate": "drizzle-kit generate",
         "db:migrate": "wrangler d1 migrations apply reactpal --remote"

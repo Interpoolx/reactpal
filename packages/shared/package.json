@@ -9,6 +9,9 @@
         "./adapters": "./src/adapters/index.ts",
         "./repositories": "./src/repositories/index.ts"
     },
+    "scripts": {
+        "build": "echo 'No build required for shared'"
+    },
     "dependencies": {
         "drizzle-orm": "^0.45.x",
         "zod": "^3.24.1"

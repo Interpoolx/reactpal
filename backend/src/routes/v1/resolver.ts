@@ -14,16 +14,6 @@ resolver.get('/resolve-tenant', (c) => {
         return c.json({ valid: false, error: 'Tenant not found' }, 404);
     }
 
-    if (!tenant && tenantId === 'default') {
-        return c.json({
-            valid: true,
-            id: 'default',
-            slug: 'default',
-            name: 'Default Tenant',
-            domain: 'default'
-        });
-    }
-
     if (tenant) {
         return c.json({
             valid: true,
@@ -31,6 +21,17 @@ resolver.get('/resolve-tenant', (c) => {
             slug: tenant.slug,
             name: tenant.name,
             domain: tenant.domain
+        });
+    }
+
+    // fallback info if tenantId is default but DB fetch failed for some reason
+    if (tenantId === 'default') {
+        return c.json({
+            valid: true,
+            id: 'default',
+            slug: 'default',
+            name: 'Default Tenant',
+            domain: 'default'
         });
     }
 

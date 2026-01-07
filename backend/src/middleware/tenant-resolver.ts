@@ -56,11 +56,20 @@ export async function tenantResolverMiddleware(c: Context, next: Next) {
     } else if (explicitlyRequested) {
         // If they asked for a specific tenant and we didn't find it, don't fall back
         c.set('tenantId', 'invalid');
-    }
-
-    // 4. Fallback to Default Tenant (only if no explicit request failed)
-    if (!c.get('tenantId')) {
-        c.set('tenantId', 'default');
+    } else {
+        // Fallback to fetching 'default' tenant from DB to ensure metadata exists
+        const db = c.env.DB;
+        const result = await db.prepare("SELECT * FROM tenants WHERE id = 'default'").first();
+        if (result) {
+            const defaultTenant = {
+                ...result,
+                config: typeof result.config === 'string' ? JSON.parse(result.config) : result.config
+            };
+            c.set('tenant', defaultTenant);
+            c.set('tenantId', 'default');
+        } else {
+            c.set('tenantId', 'default');
+        }
     }
 
     await next();

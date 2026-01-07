@@ -6,15 +6,22 @@ import { PublicPage } from './components/PublicPage';
 import { TenantProvider } from './context/TenantContext';
 
 function App() {
-    const [isLoggedIn, setIsLoggedIn] = useState(false);
+    const [isLoggedIn, setIsLoggedIn] = useState(() => {
+        return sessionStorage.getItem('rp_admin_logged_in') === 'true';
+    });
     const path = window.location.pathname;
+
+    const handleLogin = () => {
+        setIsLoggedIn(true);
+        sessionStorage.setItem('rp_admin_logged_in', 'true');
+    };
 
     if (path === '/') {
         return <PublicPage />;
     }
 
     if (path === '/hpanel' && !isLoggedIn) {
-        return <LoginPage onLogin={() => setIsLoggedIn(true)} />;
+        return <LoginPage onLogin={handleLogin} />;
     }
 
     return (

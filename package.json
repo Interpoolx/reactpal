@@ -1,0 +1,25 @@
+{
+  "name": "reactpal",
+  "version": "1.0.0",
+  "description": "ReactPress 2.0 - Enterprise Multi-Tenant SaaS Platform",
+  "type": "module",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "backend",
+    "web"
+  ],
+  "scripts": {
+    "dev": "npm run dev:web",
+    "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev:web\"",
+    "dev:backend": "npm run dev -w backend",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build --workspaces",
+    "db:push": "npm run db:push -w backend",
+    "db:sync": "npm run db:sync -w backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "wrangler": "^4.57.0"
+  }
+}

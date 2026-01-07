@@ -1,0 +1,16 @@
+{
+    "name": "@reactpress/shared",
+    "version": "1.0.0",
+    "type": "module",
+    "main": "./src/index.ts",
+    "types": "./src/index.ts",
+    "exports": {
+        ".": "./src/index.ts",
+        "./adapters": "./src/adapters/index.ts",
+        "./repositories": "./src/repositories/index.ts"
+    },
+    "dependencies": {
+        "drizzle-orm": "^0.45.x",
+        "zod": "^3.24.1"
+    }
+}

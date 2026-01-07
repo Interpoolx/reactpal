@@ -1,0 +1,19 @@
+name = "reactpal-backend"
+main = "src/index.ts"
+compatibility_date = "2025-07-18"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "reactpal"
+database_id = "39a4d54d-a335-4e15-bb6b-b02362fa16ea"
+
+[[kv_namespaces]]
+binding = "TENANT_MANIFESTS"
+id = "376a11391d654a0fbef351fe7b302fa8"
+
+[vars]
+ADMIN_KEY = "reactpress_master_key_123"
+
+# [r2_buckets]
+# binding = "ASSETS"
+# bucket_name = "reactpal-assets"

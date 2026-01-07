@@ -1,4 +1,7 @@
 # ReactPress 2.0 - Enterprise Multi-Tenant SaaS Platform
+> [!IMPORTANT]
+> **Status**: Finalized Technical Specification (Ready for Implementation)
+> **Revision**: 2.1 (Admin-Centric / Breeze-First)
 
 ## Executive Summary
 
@@ -16,6 +19,13 @@
 - **Bullet-Proof Reliability** with graceful KV fallbacks and predictive pre-fetching
 
 ---
+
+
+D1 db name: reactpal
+ID: 39a4d54d-a335-4e15-bb6b-b02362fa16ea
+
+workers.dev
+reactpal.rajeshkumarlawyer007.workers.dev
 
 
 ## Project Overview
@@ -97,6 +107,62 @@
 - **@reactpress/shared**: Shared utilities, config, logger, D1 adapter, R2 adapter
 - **@reactpress/config**: Centralized module/tenant/content-type configuration
 - **@reactpress/debug-lens**: Debug layer with source tracking
+
+---
+
+## 🏛️ Architectural Manifesto (Scalable & Pluggable)
+
+To ensure ReactPress 2.0 remains a maintainable enterprise platform, all development MUST follow these four pillars:
+
+### 1. The "Host-Plugin" Boundary
+The **Core** (HPanel/Orchestrator) is a "Host". It knows nothing about specific features (CMS, CRM, etc.). Features are "Plugins". 
+- **Rule**: Plugins register via a `ModuleDefinition`.
+- **Rule**: Core provides "Slots" (Sidebar, Settings, Dashboard Widgets).
+- **Rule**: Plugins "Fill" slots.
+
+### 2. Schema-Less at Scale (JSON-First)
+We avoid D1 schema migrations for tenant-specific or module-specific data.
+- **Unified Storage**: Use the `content_items` table with a `content` JSON column for all dynamic fields.
+- **Meta-Schema**: Use `content_types` to define how that JSON should be validated and rendered.
+
+### 3. Tenant Ultra-Isolation
+- **Manual Scoping is Forbidden**: Use a Repository pattern that automatically injects `WHERE tenant_id = ?` into every query.
+- **R2 Namespacing**: Files are stored as `buckets/tenant-id/module-id/file-name`.
+### 4. Zero-Touch "Breeze" Lifecycle
+The `Breeze` engine orchestrates these hooks:
+- `onProvision(tenantId)`: Triggered when a tenant is born.
+- `onEnable(tenantId)`: Triggered when a module is activated for a tenant.
+- `onDisable(tenantId)`: Cleanup/Archive data.
+- `onDeprovision(tenantId)`: Nuke/Archive all tenant traces.
+
+### 5. Standardized Media Service (R2 Reuse)
+Modules MUST NOT talk to R2 directly. They must use the `@reactpress/shared` `MediaService`.
+- **Automatic Scoping**: The service automatically prefixes every upload path with the `tenantId` from the current context.
+- **Transformation Engine**: Integrates with Cloudflare Images for on-the-fly resizing.
+
+### 6. Dynamic UI Injection (HPanel)
+The Admin Hub is a "Shell". It populates itself by querying the Enabled Modules of the current tenant context.
+
+- **Sidebar Visibility (RBAC)**: Modules define `visibility: string[]` (roles like `editor`, `admin`). The HPanel only renders the sidebar link if the user's role is permitted.
+- **Dynamic Dashboards**: The "Home" view of HPanel is a dynamic widget grid. Widgets register their own `visibility` rules. An Admin sees platform-wide metrics; an Editor sees content-specific stats.
+- **Route Injection**: TanStack Router uses a `lazyLoadModuleRoutes` utility to dynamically register module-specific routes under `/hpanel/*`.
+- **Settings Aggregation**: The `/settings` view automatically fetches `registration.settingsRoutes` from all active modules.
+- **Studio Aesthetics**: The HPanel uses a mandatory **Dark Studio Theme** (sleek, compact, enterprise-grade). It utilizes a **Right Drawer (Sheet)** pattern for all "Quick Edit" and "Creator" flows to maintain content context.
+
+### 7. Module Inter-Communication & Dependencies
+To keep modules "Pluggable," they must never depend on each other's internal state.
+- **Rules of Engagement**: 
+    - Communications MUST happen via the **Core Event Bus**.
+    - No direct cross-module DB imports allowed.
+- **The Event Bus (`shared/lib/events.ts`)**:
+    - `publish(event: string, payload: any)`
+    - `subscribe(event: string, handler: Function)`
+    - *Example*: CMS module publishes `post.published`, and SEO module listens to trigger sitemap regeneration.
+
+### 8. The "Manifest" over "Code" Strategy
+The platform state is defined by the **Tenant Manifest** (stored in KV/D1). 
+- If a module is NOT in the manifest, its code is never loaded.
+- This allows us to scale globally without lumping unrelated code into every request.
 
 ---
 
@@ -600,6 +666,42 @@ const AVAILABLE_MODULES: Record<string, () => Promise<ModuleDefinition>> = {
   // ... more modules
 };
 
+/**
+ * THE MODULE CONTRACT (Pluggable API)
+ * Every module MUST export a 'description' and 'getRoutes'
+ */
+export interface ModuleDefinition {
+  id: string;                           // 'crm', 'seo'
+  name: string;                         // 'Lead Manager'
+  icon: string;                         // Lucide icon name
+  category: 'content' | 'marketing' | 'business' | 'core';
+  version: string;
+  
+  // Registration Hooks
+  registration: {
+    sidebars: SidebarItem[];            // Injected into HPanel
+    dashboardWidgets: Widget[];         // Injected into Admin Home
+    settingsRoutes: SettingRoute[];     // Injected into HPanel > Settings
+    defaultVisibility: string[];        // Default roles that see this module (e.g. ['admin'])
+  };
+  
+  // Settings Specification
+  settings?: {
+    schema: ZodSchema;                  // How to validate module settings
+    defaults: Record<string, any>;      // Initial settings on 'onEnable'
+  };
+  
+  // Breeze Lifecycle Hooks
+  lifecycle: {
+    onEnable: (c: Context) => Promise<void>;   // Run migrations, seed tags
+    onDisable: (c: Context) => Promise<void>;  // Clean up cache
+  };
+  
+  // Data Logic
+  getRoutes: () => Hono;                // Exported API sub-router
+  contentTypes?: ContentTypeDefinition[]; // Optional: Register CMS schemas
+}
+
 export class ModuleLoader {
   private loadedModules: Map<string, ModuleDefinition> = new Map();
   
@@ -683,8 +785,43 @@ SELECT * FROM content_items WHERE tenant_id = ? AND status = 'published';
 SELECT * FROM content_items WHERE status = 'published'; -- DANGEROUS!
 ```
 
+### 9. Tenant-Scoped Repository Pattern (MANDATORY)
 
-### 9. Tenant Module Assignment API
+To prevent accidental data leaks, ALL database access MUST go through a tenant-scoped repository. Direct use of the Drizzle `db` object in routes is FORBIDDEN.
+
+```typescript
+// shared/lib/repository.ts
+import { type DrizzleDB } from './drizzle';
+import { and, eq, SQL } from 'drizzle-orm';
+
+export abstract class BaseRepository<TTable extends { tenantId: any }> {
+  constructor(protected db: DrizzleDB, protected tenantId: string) {}
+
+  // Enforces tenantId on every query
+  protected withTenant(condition?: SQL) {
+    const tenantFilter = eq((this.getTable() as any).tenantId, this.tenantId);
+    return condition ? and(tenantFilter, condition) : tenantFilter;
+  }
+
+  abstract getTable(): TTable;
+}
+
+// Example: Content Item Repository
+export class ContentRepository extends BaseRepository<typeof contentItems> {
+  getTable() { return contentItems; }
+
+  async findBySlug(slug: string) {
+    return this.db.query.contentItems.findFirst({
+      where: (table, { and, eq }) => and(
+        eq(table.tenantId, this.tenantId), // ENFORCED
+        eq(table.slug, slug)
+      )
+    });
+  }
+}
+```
+
+### 10. Tenant Module Assignment API
 
 ```typescript
 // backend/src/routes/tenant-modules.ts
@@ -2707,17 +2844,185 @@ export async function rateLimitMiddleware(
 }
 ```
 
-### 7. API Versioning
+### 7. Global Error Boundaries & Fallbacks
 
+```typescript
+// web/src/components/GlobalErrorBoundary.tsx
+export const GlobalErrorBoundary: FC<{ children: ReactNode }> = ({ children }) => {
+  return (
+    <ErrorBoundary
+      FallbackComponent={GlobalErrorFallback}
+      onReset={() => window.location.reload()}
+      onError={(error, info) => {
+        logger.error('Global UI Crash', { error: error.message, info });
+      }}
+    >
+      {children}
+    </ErrorBoundary>
+  );
+};
+
+// backend/src/middleware/error-handler.ts
+export const globalErrorHandler = (err: Error, c: Context) => {
+  const status = err instanceof HttpException ? err.status : 500;
+  logger.error(`Unhandled Error: ${err.message}`, { path: c.req.path, stack: err.stack });
+  
+  return c.json({
+    success: false,
+    error: {
+      code: 'INTERNAL_SERVER_ERROR',
+      message: 'A system error occurred. Our team has been notified.',
+      requestId: c.get('requestId')
+    }
+  }, status);
+};
 ```
-// Versioned routes from start
-app.route('/api/v1', v1Routes);
-app.route('/api/v2', v2Routes);
 
-// Future-proofing
-app.get('/api/v2/content-items', async (c) => {
-  // V2 implementation
+### 8. Circuit Breaker & Retry Mechanisms
+
+```typescript
+// shared/lib/resilience.ts
+export class CircuitBreaker {
+  private state: 'CLOSED' | 'OPEN' | 'HALF_OPEN' = 'CLOSED';
+  private failureCount = 0;
+  private lastFailureTime?: number;
+
+  constructor(private options: { threshold: number; resetTimeout: number }) {}
+
+  async execute<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
+    if (this.state === 'OPEN') {
+      if (Date.now() - (this.lastFailureTime || 0) > this.options.resetTimeout) {
+        this.state = 'HALF_OPEN';
+      } else {
+        return fallback;
+      }
+    }
+
+    try {
+      const result = await fn();
+      if (this.state === 'HALF_OPEN') {
+        this.state = 'CLOSED';
+        this.failureCount = 0;
+      }
+      return result;
+    } catch (err) {
+      this.failureCount++;
+      this.lastFailureTime = Date.now();
+      if (this.failureCount >= this.options.threshold) {
+        this.state = 'OPEN';
+      }
+      throw err;
+    }
+  }
+}
+
+// Retry helper using exponential backoff
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  retries = 3,
+  delay = 1000
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (retries === 0) throw err;
+    await new Promise(r => setTimeout(r, delay));
+    return withRetry(fn, retries - 1, delay * 2);
+  }
+}
+```
+
+### 9. Health Check Endpoints
+
+```typescript
+// backend/src/routes/health.ts
+app.get('/health', async (c) => {
+  const checks = {
+    db: await checkD1Connection(c.env.DB),
+    kv: await checkKVConnection(c.env.CACHE),
+    r2: await checkR2Connection(c.env.BUCKET),
+    timestamp: Date.now(),
+    version: c.env.VERSION
+  };
+  
+  const isHealthy = Object.values(checks).every(v => v === true || typeof v !== 'boolean');
+  return c.json({ status: isHealthy ? 'UP' : 'DEGRADED', checks }, isHealthy ? 200 : 503);
 });
+```
+
+### 11. Observability: Metrics & Tracing
+
+```typescript
+// shared/lib/observability.ts
+export const trackMetric = (c: Context, name: string, value: number, tags: Record<string, string> = {}) => {
+  // Cloudflare Analytics Engine indexing
+  c.env.METRICS.writeDataPoint({
+    blobs: [name, c.get('tenantId'), ...Object.values(tags)],
+    doubles: [value],
+    indexes: [name]
+  });
+};
+
+// Distributed Tracing Middleware
+export const tracingMiddleware = async (c: Context, next: Next) => {
+  const traceId = c.req.header('x-trace-id') || crypto.randomUUID();
+  c.set('traceId', traceId);
+  c.header('x-trace-id', traceId);
+  
+  const start = performance.now();
+  await next();
+  const duration = performance.now() - start;
+  
+  trackMetric(c, 'request_duration', duration, { path: c.req.path, status: c.res.status.toString() });
+};
+```
+
+### 12. Security Hardening
+
+```typescript
+// backend/src/middleware/security.ts
+export const securityHeadersMiddleware = async (c: Context, next: Next) => {
+  await next();
+  c.header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://*.cloudflare.com;");
+  c.header('X-Frame-Options', 'DENY');
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+};
+
+// Advanced IP-based Rate Limiting (Tiered)
+export const advancedRateLimiter = (options: { limit: number; window: number; tier: string }) => {
+  return async (c: Context, next: Next) => {
+    const ip = c.req.header('cf-connecting-ip') || 'unknown';
+    const key = `ratelimit:${options.tier}:${ip}`;
+    // Implementation uses KV with window-based expiration
+    await next();
+  };
+};
+```
+
+### 13. Audit Logging System
+
+```typescript
+// shared/lib/audit.ts
+export const logAuditEvent = async (c: Context, event: {
+  action: string;
+  resource: string;
+  resourceId: string;
+  meta?: any;
+}) => {
+  const auditLog = {
+    tenantId: c.get('tenantId'),
+    userId: c.get('userId'),
+    traceId: c.get('traceId'),
+    ip: c.req.header('cf-connecting-ip'),
+    timestamp: Date.now(),
+    ...event
+  };
+  
+  // High-priority audit logs to D1/Queue
+  await c.env.DB.prepare('INSERT INTO audit_logs ...').bind(...).run();
+};
 ```
 
 ---
@@ -2879,16 +3184,29 @@ npm run create:module
 - [ ]  Law Statutes module (example)
 - [ ]  Tools Directory module (example)
 
-### Phase 5: Production Readiness
+### Phase 5: Production Readiness (Stability Foundation)
 
-- [ ]  Comprehensive error handling
-- [ ]  Structured logging
-- [ ]  Performance monitoring
-- [ ]  Rate limiting per tenant
-- [ ]  API versioning
-- [ ]  SEO optimization (sitemaps, RSS)
-- [ ]  Security headers
-- [ ]  Backup strategy
+- [ ] Implement global error boundaries (Web & Backend)
+- [ ] Add circuit breaker pattern for external integrations
+- [ ] Configure retry mechanisms with exponential backoff
+- [ ] Set up fallback strategies (KV fallbacks for D1)
+- [ ] Create health check endpoints (`/health`)
+
+### Phase 6: Observability & Monitoring
+
+- [ ] Implement metrics collection (Cloudflare Analytics Engine)
+- [ ] Set up distributed tracing (W3C Trace Parent headers)
+- [ ] Configure alerting rules (Error rates, Latency)
+- [ ] Create dashboard views in Admin UI for system health
+- [ ] Implement structured audit logging across all packages
+
+### Phase 7: Security Hardening
+
+- [ ] Add security headers (HSTS, CSP, X-Frame-Options)
+- [ ] Configure advanced rate limiting (Tiered IP-based)
+- [ ] Implement strict input validation (Zod + JSON Schema)
+- [ ] Set up WAF rules for common exploits (SQLi, XSS)
+- [ ] Configure centralized audit logging for compliance
 
 ---
 
@@ -3783,64 +4101,54 @@ interface LayoutSystem {
 
 ---
 
-## 🚀 "Breeze" Admin Orchestration (Zero-Touch Provisioning)
+## 🚀 "Breeze" Zero-Touch Provisioning (Internal Logic)
+
+Breeze is the **Master Orchestrator**. It doesn't perform work itself; it delegates to the registered lifecycle hooks of each module.
+
+### 1. Provisioning Flow
+When a new tenant is requested via the Admin Hub, Breeze executes the following sequence:
+
+1.  **Infrastructure Initialization**: 
+    - Create DNS record via Cloudflare API.
+    - Provision tenant-specific KV namespace entry for rapid configuration lookup.
+2.  **Core Seeding**:
+    - Insert into `tenants` and `tenant_domains` tables.
+    - Create the initial `admin` user and assign the `super_admin` role.
+3.  **Module Activation (Cascade)**:
+    - Loop through `CORE_MODULES` (Auth, Tenants) and any `DEFAULT_MODULES` (CMS, SEO).
+    - Invoke `module.lifecycle.onEnable(context)` for each.
+4.  **Theme Injection**:
+    - Inject default design tokens into the theme engine.
+
+### 2. The `BreezeContext`
+Every lifecycle hook receives a `BreezeContext` containing:
+- `db`: The global D1 connection.
+- `kv`: The global KV connection.
+- `tenantId`: The ID of the tenant being provisioned.
+- `config`: Any custom configuration passed during setup (e.g., initial site name).
 
 ```typescript
-export class BreezeProvisioning {
-  async provisionTenant(config: TenantProvisionConfig): Promise<TenantResult> {
-    const steps = [
-      this.verifyDomain,      // Automatic SSL/DNS via Cloudflare
-      this.createDatabase,    // Shadow D1 initialization
-      this.setupStorage,      // R2 bucket with tenant prefix
-      this.deploySchema,      // Base schema + tenant migrations
-      this.activateModules,   // One-click module toggle
-      this.applyTheme,        // Design token injection
-      this.createAdmin,       // First admin user setup
-    ];
-    
-    // Instant tenant creation: < 30 seconds
-    for (const step of steps) {
-      const result = await step.call(this, config);
-      if (!result.success) {
-        await this.rollback(config.tenantId);
-        throw new ProvisioningError(result.error);
-      }
+// Example: SEO Module Lifecycle Hook
+export const SeoModule: ModuleDefinition = {
+  // ...
+  lifecycle: {
+    onEnable: async ({ db, tenantId }) => {
+      // Create default robots.txt and sitemap settings for the new tenant
+      await db.insert(seoSettings).values({
+        tenantId,
+        sitemapEnabled: true,
+        robotsTxt: 'User-agent: *\nAllow: /'
+      });
     }
-    
-    return { tenantId: config.tenantId, status: 'active' };
   }
-}
+};
 ```
 
 ---
 
-## 📊 Smart Module Lifecycle (Micro-Backend Modules)
-
-```typescript
-interface ModuleLifecycle {
-  registration: {
-    onActivate: (tenantId: string) => Promise<void>;
-    onDeactivate: (tenantId: string) => Promise<void>;
-  };
-  
-  migrations: {
-    getMigrations: () => Migration[];
-    runMigrations: (tenantId: string) => Promise<void>;
-    rollbackMigrations: (tenantId: string, version: number) => Promise<void>;
-  };
-  
-  routes: {
-    getRoutes: () => Hono;
-    basePath: `/api/modules/${moduleId}`;
-  };
-  
-  frontend: {
-    component: () => Promise<{ default: ComponentType }>;
-    hydration: 'eager' | 'visible' | 'idle' | 'interaction';
-    criticalCSS: string;
-  };
-}
-```
+// 📊 Module Development Contract
+// This section has been unified into the 'ModuleDefinition' in the Architecture section (Line 100+).
+// All modules MUST implement the 'ModuleDefinition' interface for full pluggability.
 
 ---
 

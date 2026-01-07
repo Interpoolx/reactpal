@@ -141,4 +141,564 @@ reactpress/
 
 ---
 
-[... REST OF ORIGINAL 3000+ LINE SPECIFICATION FROM BACKUP CONTINUES HERE WITH INTEGRATED ENHANCEMENTS ...]
+## 📦 Project Structure (Original Details Merged)
+
+```
+reactpress/
+├── packages/                        # Core modules and shared packages
+│   ├── shared-types/               # Shared TypeScript types
+│   ├── config/                     # Module/tenant/content-type registry
+│   ├── debug/                     # Debug layer
+│   └── modules-*/                 # Pluggable feature modules
+│       ├── modules-content-types/    # Content type system (NEW CORE!)
+│       ├── modules-cms/            # Blog/Articles content type
+│       ├── modules-jobs/           # Job listings content type (EXAMPLE)
+│       ├── modules-directory/       # Business directory content type (EXAMPLE)
+│       ├── modules-laws/           # Law statutes content type (EXAMPLE)
+│       ├── modules-tools/          # Tools directory content type (EXAMPLE)
+│       ├── modules-auth/           # Authentication & RBAC
+│       ├── modules-tenants/        # Multi-tenancy infrastructure
+│       ├── modules-themes/          # Theme engine
+│       ├── modules-block-builder/   # Visual page builder
+│       ├── modules-seo/            # SEO tools
+│       └── modules-template/       # Module template
+├── backend/                        # Hono + Cloudflare Workers
+│   ├── src/
+│   │   ├── index.ts               # Main Workers entry
+│   │   ├── modules-loader.ts       # Dynamic module loading
+│   │   ├── middleware/            # Auth, CORS, CSRF, rate limit
+│   │   ├── db/                   # Drizzle schemas & repositories
+│   │   │   ├── migrations/        # D1 migration files
+│   │   │   └── repositories/     # Data access layer
+│   │   ├── storage/               # R2 & KV operations
+│   │   ├── routes/                # Core API routes
+│   │   └── modules/              # Local module route overrides
+│   ├── wrangler.toml              # Workers configuration
+│   └── package.json
+├── web/                            # Vite React frontend
+│   ├── src/
+│   │   ├── routes/                 # TanStack Router (file-based)
+│   │   │   ├── __root.tsx         # Root layout
+│   │   │   ├── hpanel/            # Admin panel
+│   │   │   ├── user/              # User dashboard
+│   │   │   ├── dynamic/           # Dynamic content type routes
+│   │   │   ├── login.tsx
+│   │   │   └── ...
+│   │   ├── components/
+│   │   │   ├── ui/               # Radix UI primitives
+│   │   │   ├── admin/             # Admin components
+│   │   │   ├── content-types/      # Content type system UI (NEW!)
+│   │   │   │   ├── ContentTypeManager.tsx
+│   │   │   │   ├── ContentTypeEditor.tsx
+│   │   │   │   ├── ContentItemManager.tsx
+│   │   │   │   ├── ContentItemEditor.tsx
+│   │   │   │   └── FieldRenderer.tsx
+│   │   │   └── shared/           # Shared components
+│   │   ├── config/
+│   │   │   ├── site.ts            # Global site config
+│   │   │   ├── widgets.ts         # Widget registry
+│   │   │   └── tenants/           # Tenant definitions
+│   │   ├── context/                # React contexts
+│   │   ├── hooks/                  # Custom hooks
+│   │   └── lib/                    # Utilities
+│   ├── public/                     # Static assets
+│   └── package.json
+├── shared/                         # Shared utilities
+│   ├── lib/
+│   │   ├── d1-adapter.ts         # D1 database wrapper
+│   │   ├── r2-adapter.ts         # R2 storage wrapper
+│   │   ├── kv-adapter.ts         # KV caching wrapper
+│   │   ├── logger.ts             # Structured logging
+│   │   ├── migrations.ts         # Migration runner
+│   │   └── utils.ts              # Utilities
+│   └── package.json
+├── db/migrations/                  # D1 database migrations
+│   ├── 001_initial.sql
+│   ├── 002_content_types.sql
+│   └── ...
+├── scripts/                        # Automation scripts
+│   ├── setup-workspaces.js          # Auto-discover modules
+│   ├── create-module.js            # Module scaffold generator
+│   ├── create-content-type.js      # Content type generator (NEW!)
+│   └── harmonize-deps.js          # Dependency version sync
+├── package.json                    # Root workspace config
+├── tsconfig.json                  # Root TypeScript config
+└── wrangler.toml                  # Root Workers config
+```
+
+---
+
+##  Multi-Tenant Architecture (CRITICAL)
+
+This section defines how ReactPress handles **multiple domains/tenants** with optimized bundle sizes and tenant-specific module loading.
+
+### Core Principles
+
+1. **Domain-Based Resolution**: Each domain maps to a tenant with its own content, config, and modules
+2. **Lazy Loading Everything**: Only load modules assigned to the current tenant
+3. **Shared Core, Isolated Content**: Core code shared, content/config isolated per tenant
+4. **Zero Over-Bundling**: Never bundle modules a tenant doesn't use
+
+### 1. Tenant Configuration Schema
+
+```typescript
+// @reactpress/shared-types/src/tenant.ts
+interface TenantDefinition {
+  id: string;                           // UUID
+  slug: string;                         // Unique slug: 'web4strategy'
+  name: string;                         // Display name: 'Web4Strategy'
+  
+  // Domain Configuration
+  domains: {
+    primary: string;                    // 'web4strategy.com'
+    aliases: string[];                  // ['www.web4strategy.com', 'staging.web4strategy.com']
+  };
+  
+  // Module Assignments
+  modules: {
+    enabled: string[];                  // ['cms', 'crm', 'seo'] - modules enabled for this tenant
+    disabled: string[];                 // Explicitly disabled modules (overrides defaults)
+  };
+  
+  // Content Type Access
+  contentTypes: {
+    enabled: string[];                  // Content types this tenant can use
+    custom: ContentTypeDefinition[];    // Tenant-specific custom content types
+  };
+  
+  // Theme/Branding
+  theme: {
+    id: string;                         // Theme ID
+    config: Record<string, any>;        // Theme customization (colors, fonts, etc.)
+  };
+  
+  // Feature Flags
+  features: Record<string, boolean>;    // { 'beta-editor': true, 'analytics': false }
+  
+  // Limits & Quotas
+  limits: {
+    maxUsers: number;
+    maxStorage: number;                 // bytes
+    maxContentItems: number;
+  };
+  
+  // Status
+  status: 'active' | 'suspended' | 'trial';
+  createdAt: number;
+  updatedAt: number;
+}
+```
+
+### 2. Domain-Based Tenant Resolution
+
+```typescript
+// backend/src/middleware/tenant-resolver.ts
+import type { Context, Next } from 'hono';
+
+export async function tenantResolverMiddleware(c: Context, next: Next) {
+  // 1. Extract domain from request
+  const host = c.req.header('host') || '';
+  const domain = host.split(':')[0]; // Remove port
+  
+  // 2. Check cache first (KV)
+  const cache = new KVCache(c.env.CACHE);
+  let tenant = await cache.get<TenantDefinition>(`tenant:domain:${domain}`);
+  
+  // 3. If not cached, query database
+  if (!tenant) {
+    const db = new DbHelper(c.env.DB);
+    tenant = await db.queryOne<TenantDefinition>(`
+      SELECT t.* FROM tenants t
+      INNER JOIN tenant_domains td ON t.id = td.tenant_id
+      WHERE td.domain = ?
+      AND t.status = 'active'
+    `, [domain]);
+    
+    if (tenant) {
+      // Cache for 5 minutes
+      await cache.set(`tenant:domain:${domain}`, tenant, 300);
+    }
+  }
+  
+  // 4. Handle tenant not found
+  if (!tenant) {
+    // Check if it's the default/fallback tenant
+    if (domain === c.env.DEFAULT_DOMAIN) {
+      tenant = await getDefaultTenant(c.env);
+    } else {
+      return c.json({ error: 'Tenant not found' }, 404);
+    }
+  }
+  
+  // 5. Attach tenant to context (available in all routes)
+  c.set('tenant', tenant);
+  c.set('tenantId', tenant.id);
+  
+  await next();
+}
+
+// Usage in routes
+app.get('/api/content', async (c) => {
+  const tenant = c.get('tenant'); // TenantDefinition
+  const tenantId = c.get('tenantId'); // string
+  
+  // All queries automatically scoped to tenant
+  const items = await db.query('SELECT * FROM content_items WHERE tenant_id = ?', [tenantId]);
+});
+```
+
+### 3. Module Classification System
+
+```typescript
+// @reactpress/config/src/modules.ts
+
+// Core modules - ALWAYS loaded for all tenants
+export const CORE_MODULES = [
+  'auth',           // Authentication (required)
+  'tenants',        // Multi-tenancy (required)
+  'themes',         // Theme engine (required)
+] as const;
+
+// Default modules - loaded unless explicitly disabled
+export const DEFAULT_MODULES = [
+  'cms',            // Blog/Pages
+  'media',          // Media library
+  'menus',          // Navigation menus
+] as const;
+
+// Optional modules - only loaded when explicitly enabled
+export const OPTIONAL_MODULES = [
+  'crm',            // CRM/Forms
+  'seo',            // SEO Tools
+  'block-builder',  // Visual page builder
+  'jobs',           // Job listings
+  'directory',      // Business directory
+  'laws',           // Law library
+  'tools',          // Tools directory
+  'ecommerce',      // E-commerce
+  'analytics',      // Analytics dashboard
+  'newsletters',    // Email newsletters
+] as const;
+
+// Module metadata registry
+export const MODULE_REGISTRY: Record<string, ModuleMetadata> = {
+  cms: {
+    id: 'cms',
+    name: 'Content Management',
+    description: 'Blog posts and static pages',
+    category: 'content',
+    bundleSize: 45000,  // ~45KB (for build analysis)
+    dependencies: [],   // No dependencies
+    loadPriority: 1,    // Load first
+  },
+  crm: {
+    id: 'crm',
+    name: 'CRM & Forms',
+    description: 'Contact forms and lead management',
+    category: 'business',
+    bundleSize: 78000,  // ~78KB
+    dependencies: ['cms'], // Requires CMS for form embedding
+    loadPriority: 2,
+  },
+  seo: {
+    id: 'seo',
+    name: 'SEO Tools',
+    description: 'Sitemaps, meta tags, and SEO analysis',
+    category: 'marketing',
+    bundleSize: 52000,  // ~52KB
+    dependencies: ['cms'],
+    loadPriority: 3,
+  },
+  // ... other modules
+};
+```
+
+### 4. Frontend: Lazy Module Loading (CRITICAL for Bundle Size)
+
+```typescript
+// web/src/lib/module-loader.ts
+import { lazy, Suspense, type ComponentType } from 'react';
+
+// Module component registry with lazy imports
+const MODULE_COMPONENTS: Record<string, () => Promise<{ default: ComponentType }>> = {
+  // Core (always bundled in main chunk)
+  // -- none, core is in main bundle --
+  
+  // Lazy-loaded modules (separate chunks)
+  cms: () => import('@reactpress/modules-cms/components'),
+  crm: () => import('@reactpress/modules-crm/components'),
+  seo: () => import('@reactpress/modules-seo/components'),
+  'block-builder': () => import('@reactpress/modules-block-builder/components'),
+  jobs: () => import('@reactpress/modules-jobs/components'),
+  directory: () => import('@reactpress/modules-directory/components'),
+  ecommerce: () => import('@reactpress/modules-ecommerce/components'),
+};
+
+// Dynamic module loader hook
+export function useModuleComponent(moduleId: string) {
+  const [Component, setComponent] = useState<ComponentType | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  
+  useEffect(() => {
+    const loader = MODULE_COMPONENTS[moduleId];
+    if (!loader) {
+      setError(new Error(`Module not found: ${moduleId}`));
+      setLoading(false);
+      return;
+    }
+    
+    loader()
+      .then(mod => {
+        setComponent(() => mod.default);
+        setLoading(false);
+      })
+      .catch(err => {
+        setError(err);
+        setLoading(false);
+      });
+  }, [moduleId]);
+  
+  return { Component, loading, error };
+}
+
+// Create lazy component with loading state
+export function createLazyModule(moduleId: string) {
+  const loader = MODULE_COMPONENTS[moduleId];
+  if (!loader) {
+    return () => <div>Module not found: {moduleId}</div>;
+  }
+  
+  const LazyComponent = lazy(loader);
+  
+  return (props: any) => (
+    <Suspense fallback={<ModuleLoadingSkeleton moduleId={moduleId} />}>
+      <LazyComponent {...props} />
+    </Suspense>
+  );
+}
+```
+
+### 5. Tenant-Aware Admin Sidebar
+
+```typescript
+// web/src/components/admin/AdminSidebar.tsx
+export const AdminSidebar: FC = () => {
+  const { tenant, tenantModules, isLoading } = useTenant();
+  
+  if (isLoading) return <SidebarSkeleton />;
+  
+  // Filter sidebar items to only show enabled modules
+  const sidebarItems = useMemo(() => {
+    const allItems = getAllSidebarItems(); // Get all possible items
+    
+    return allItems.filter(item => {
+      // Core items always show
+      if (CORE_MODULES.includes(item.moduleId)) return true;
+      
+      // Check if module is enabled for this tenant
+      return tenantModules.includes(item.moduleId);
+    });
+  }, [tenantModules]);
+  
+  return (
+    <aside className="admin-sidebar">
+      {sidebarItems.map(item => (
+        <SidebarItem key={item.moduleId} {...item} />
+      ))}
+    </aside>
+  );
+};
+
+// Sidebar items registry
+function getAllSidebarItems(): SidebarItem[] {
+  return [
+    // Core (always visible)
+    { moduleId: 'dashboard', to: '/hpanel', icon: Home, label: 'Dashboard' },
+    
+    // Content modules
+    { moduleId: 'cms', to: '/hpanel/cms', icon: FileText, label: 'Content' },
+    { moduleId: 'media', to: '/hpanel/media', icon: Image, label: 'Media' },
+    { moduleId: 'menus', to: '/hpanel/menus', icon: Menu, label: 'Menus' },
+    
+    // Optional modules (only show if enabled)
+    { moduleId: 'crm', to: '/hpanel/crm', icon: Users, label: 'CRM' },
+    { moduleId: 'seo', to: '/hpanel/seo', icon: Search, label: 'SEO' },
+    { moduleId: 'block-builder', to: '/hpanel/builder', icon: Layout, label: 'Page Builder' },
+    { moduleId: 'jobs', to: '/hpanel/jobs', icon: Briefcase, label: 'Jobs' },
+    { moduleId: 'ecommerce', to: '/hpanel/store', icon: ShoppingCart, label: 'Store' },
+    
+    // Settings (always visible)
+    { moduleId: 'settings', to: '/hpanel/settings', icon: Settings, label: 'Settings' },
+  ];
+}
+```
+
+### 6. Vite Configuration for Code Splitting
+
+```typescript
+// web/vite.config.ts
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: (id) => {
+          // Core vendors (always loaded)
+          if (id.includes('node_modules')) {
+            if (id.includes('react') || id.includes('react-dom')) {
+              return 'vendor-react';
+            }
+            if (id.includes('@tanstack')) {
+              return 'vendor-tanstack';
+            }
+            if (id.includes('lucide')) {
+              return 'vendor-icons';
+            }
+          }
+          
+          // Module-based chunks (lazy loaded)
+          if (id.includes('modules-cms')) return 'module-cms';
+          if (id.includes('modules-crm')) return 'module-crm';
+          if (id.includes('modules-seo')) return 'module-seo';
+          if (id.includes('modules-block-builder')) return 'module-builder';
+          if (id.includes('modules-jobs')) return 'module-jobs';
+          if (id.includes('modules-directory')) return 'module-directory';
+          if (id.includes('modules-ecommerce')) return 'module-ecommerce';
+          
+          // Shared code
+          if (id.includes('shared')) return 'shared';
+          
+          return undefined; // Default chunking
+        },
+      },
+    },
+    // Warn if chunks exceed size limits
+    chunkSizeWarningLimit: 250, // 250KB warning threshold
+  },
+});
+```
+
+### 7. Backend: Tenant-Scoped Module Loading
+
+```typescript
+// backend/src/modules-loader.ts
+import { Hono } from 'hono';
+
+interface ModuleDefinition {
+  id: string;
+  getRoutes: () => Hono;
+}
+
+// Dynamic module registry
+const AVAILABLE_MODULES: Record<string, () => Promise<ModuleDefinition>> = {
+  cms: () => import('@reactpress/modules-cms').then(m => m.CmsModule),
+  crm: () => import('@reactpress/modules-crm').then(m => m.CrmModule),
+  seo: () => import('@reactpress/modules-seo').then(m => m.SeoModule),
+  jobs: () => import('@reactpress/modules-jobs').then(m => m.JobsModule),
+  // ... more modules
+};
+
+export class ModuleLoader {
+  private loadedModules: Map<string, ModuleDefinition> = new Map();
+  
+  constructor(private app: Hono) {}
+  
+  async loadModulesForTenant(tenant: TenantDefinition): Promise<void> {
+    const modulesToLoad = this.getModulesForTenant(tenant);
+    
+    for (const moduleId of modulesToLoad) {
+      // Skip if already loaded
+      if (this.loadedModules.has(moduleId)) continue;
+      
+      const loader = AVAILABLE_MODULES[moduleId];
+      if (!loader) {
+        console.warn(`Module not found: ${moduleId}`);
+        continue;
+      }
+      
+      try {
+        const module = await loader();
+        this.loadedModules.set(moduleId, module);
+        
+        // Mount module routes under /api/modules/{moduleId}
+        const routes = module.getRoutes();
+        this.app.route(`/api/modules/${moduleId}`, routes);
+        
+        console.log(`✅ Module loaded: ${moduleId}`);
+      } catch (error) {
+        console.error(`❌ Failed to load module: ${moduleId}`, error);
+      }
+    }
+  }
+  
+  private getModulesForTenant(tenant: TenantDefinition): string[] {
+    const modules = new Set<string>();
+    
+    // Always include core modules
+    CORE_MODULES.forEach(m => modules.add(m));
+    
+    // Include default modules (unless disabled)
+    DEFAULT_MODULES.forEach(m => {
+      if (!tenant.modules.disabled.includes(m)) {
+        modules.add(m);
+      }
+    });
+    
+    // Include explicitly enabled optional modules
+    tenant.modules.enabled.forEach(m => modules.add(m));
+    
+    return Array.from(modules);
+  }
+}
+```
+
+### 8. Database: Tenant Isolation Pattern
+
+```sql
+-- All content tables MUST include tenant_id
+-- This ensures complete data isolation
+
+CREATE TABLE content_items (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,          -- REQUIRED for isolation
+  content_type_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  -- ... other fields
+  
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+
+-- Compound index for tenant-scoped queries
+CREATE INDEX idx_content_tenant ON content_items(tenant_id, content_type_id);
+
+-- Row-Level Security Pattern (enforced in application layer)
+-- All queries MUST include WHERE tenant_id = ?
+
+-- ✅ CORRECT: Always scope by tenant
+SELECT * FROM content_items WHERE tenant_id = ? AND status = 'published';
+
+-- ❌ WRONG: Never query without tenant scope
+SELECT * FROM content_items WHERE status = 'published'; -- DANGEROUS!
+```
+
+### 9. Tenant Module Assignment API
+
+```typescript
+// backend/src/routes/tenant-modules.ts
+import { Hono } from 'hono';
+import { z } from 'zod';
+
+const tenantModulesRouter = new Hono();
+
+// Get modules for a tenant
+tenantModulesRouter.get('/:tenantId/modules', async (c) => {
+  const { tenantId } = c.req.param();
+  // ... implementation
+});
+```
+
+---
+
+[... ADDITIONAL SECTIONS FROM ORIGINAL DOCUMENT ...]

@@ -2147,7 +2147,9 @@ async function tenantResolverMiddleware(c, next) {
   const domain = host.split(":")[0];
   const queryId = c.req.query("tenant") || c.req.query("tenantId");
   let tenant = null;
+  let explicitlyRequested = false;
   if (queryId) {
+    explicitlyRequested = true;
     const db = c.env.DB;
     const result = await db.prepare(`
             SELECT t.* FROM tenants t
@@ -2183,6 +2185,8 @@ async function tenantResolverMiddleware(c, next) {
   if (tenant) {
     c.set("tenant", tenant);
     c.set("tenantId", tenant.id);
+  } else if (explicitlyRequested) {
+    c.set("tenantId", "invalid");
   }
   if (!c.get("tenantId")) {
     c.set("tenantId", "default");
@@ -2287,11 +2291,26 @@ var resolver = new Hono2();
 resolver.get("/resolve-tenant", (c) => {
   const tenantId = c.get("tenantId");
   const tenant = c.get("tenant");
+  if (tenantId === "invalid") {
+    return c.json({ valid: false, error: "Tenant not found" }, 404);
+  }
   if (!tenant && tenantId === "default") {
-    return c.json({ valid: true, id: "default", slug: "default" });
+    return c.json({
+      valid: true,
+      id: "default",
+      slug: "default",
+      name: "Default Tenant",
+      domain: "default"
+    });
   }
   if (tenant) {
-    return c.json({ valid: true, id: tenant.id, slug: tenant.slug });
+    return c.json({
+      valid: true,
+      id: tenant.id,
+      slug: tenant.slug,
+      name: tenant.name,
+      domain: tenant.domain
+    });
   }
   return c.json({ valid: false }, 404);
 });

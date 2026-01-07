@@ -84,7 +84,7 @@ export function TopBar() {
                 {/* Open Frontend Link */}
                 {activeTenant && (
                     <a
-                        href={`/?tenant=${activeTenant.id}`}
+                        href={`/?tenant=${activeTenant.domain || activeTenant.slug || activeTenant.id}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         title="Open Public Site"

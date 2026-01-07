@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 
 export function PublicPage() {
     const [status, setStatus] = useState<'loading' | 'found' | 'not-found'>('loading');
-    const [tenantId, setTenantId] = useState('');
+    const [displayText, setDisplayText] = useState('');
 
     useEffect(() => {
         const searchParams = new URLSearchParams(window.location.search);
@@ -18,7 +18,7 @@ export function PublicPage() {
                 throw new Error('Not found');
             })
             .then(data => {
-                setTenantId(data.id || data.slug);
+                setDisplayText(data.domain || data.name || data.slug);
                 setStatus('found');
             })
             .catch(() => {
@@ -44,7 +44,7 @@ export function PublicPage() {
     return (
         <div className="min-h-screen flex items-center justify-center bg-white text-black font-sans">
             <div className="text-center">
-                <h1 className="text-4xl font-bold">Hello, {tenantId}</h1>
+                <h1 className="text-4xl font-bold">Hello, {displayText}</h1>
                 <p className="text-gray-500 mt-2">ReactPress 2.0 Alpha</p>
             </div>
         </div>

@@ -10,12 +10,28 @@ resolver.get('/resolve-tenant', (c) => {
     const tenantId = c.get('tenantId');
     const tenant = c.get('tenant');
 
+    if (tenantId === 'invalid') {
+        return c.json({ valid: false, error: 'Tenant not found' }, 404);
+    }
+
     if (!tenant && tenantId === 'default') {
-        return c.json({ valid: true, id: 'default', slug: 'default' });
+        return c.json({
+            valid: true,
+            id: 'default',
+            slug: 'default',
+            name: 'Default Tenant',
+            domain: 'default'
+        });
     }
 
     if (tenant) {
-        return c.json({ valid: true, id: tenant.id, slug: tenant.slug });
+        return c.json({
+            valid: true,
+            id: tenant.id,
+            slug: tenant.slug,
+            name: tenant.name,
+            domain: tenant.domain
+        });
     }
 
     return c.json({ valid: false }, 404);

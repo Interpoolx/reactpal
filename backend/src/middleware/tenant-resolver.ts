@@ -7,8 +7,10 @@ export async function tenantResolverMiddleware(c: Context, next: Next) {
     // 1. Try to resolve via ?tenant=... or ?tenantId=... parameter (Manual Override / Debug)
     const queryId = c.req.query('tenant') || c.req.query('tenantId');
     let tenant: any = null;
+    let explicitlyRequested = false;
 
     if (queryId) {
+        explicitlyRequested = true;
         const db = c.env.DB;
         const result = await db.prepare(`
             SELECT t.* FROM tenants t
@@ -51,9 +53,12 @@ export async function tenantResolverMiddleware(c: Context, next: Next) {
     if (tenant) {
         c.set('tenant', tenant);
         c.set('tenantId', tenant.id);
+    } else if (explicitlyRequested) {
+        // If they asked for a specific tenant and we didn't find it, don't fall back
+        c.set('tenantId', 'invalid');
     }
 
-    // 4. Fallback to Default Tenant
+    // 4. Fallback to Default Tenant (only if no explicit request failed)
     if (!c.get('tenantId')) {
         c.set('tenantId', 'default');
     }

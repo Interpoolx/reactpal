@@ -197,7 +197,7 @@ function UserQuickActions({
             </button>
 
             {isOpen && (
-                <div className="absolute right-0 mt-1 w-48 bg-dark border border-border-muted rounded-xl shadow-xl z-50 py-1 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+                <div className="absolute right-0 top-full mt-1 w-48 bg-darker border border-border-muted rounded-xl shadow-xl z-50 py-1 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
                     {QUICK_ACTIONS.map((action, i) =>
                         action.type === 'divider' ? (
                             <div key={i} className="border-t border-border-muted my-1" />

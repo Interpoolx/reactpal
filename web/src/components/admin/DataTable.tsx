@@ -102,7 +102,7 @@ export function DataTable<TData>({
     const selectedRows = table.getFilteredSelectedRowModel().rows.map(r => r.original);
 
     return (
-        <div className="bg-darker rounded-2xl border border-border-muted overflow-hidden">
+        <div className="bg-darker rounded-2xl border border-border-muted overflow-visible">
             {/* Toolbar */}
             <div className="flex items-center justify-between p-4 border-b border-border-muted">
                 <div className="flex items-center gap-2">
@@ -128,7 +128,7 @@ export function DataTable<TData>({
             </div>
 
             {/* Table */}
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto min-h-[300px]">
                 <table className="w-full">
                     <thead className="bg-dark/50">
                         {table.getHeaderGroups().map(headerGroup => (

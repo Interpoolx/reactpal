@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ColumnDef } from '@tanstack/react-table';
 import { DataTable } from './DataTable';
 import { RightDrawer } from './RightDrawer';
@@ -7,8 +7,8 @@ import { apiFetch } from '../../lib/api';
 import {
     Users, UserPlus, Shield, Mail, Calendar,
     CheckCircle, Clock, XCircle, AlertTriangle,
-    Search, Download, Upload, Eye, Edit, Key, History, UserX, X,
-    Plus, Trash2, Building2
+    Search, Download, Upload, Eye, Edit2, Key, History, UserX, X,
+    Plus, Trash2, Building2, MoreVertical
 } from 'lucide-react';
 import { useToast } from '../ui/Toast';
 
@@ -163,41 +163,56 @@ function UserQuickActions({
     onStatusChange: (status: User['status']) => void;
 }) {
     const [isOpen, setIsOpen] = useState(false);
+    const menuRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+                setIsOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const QUICK_ACTIONS = [
+        { label: 'View Details', icon: Eye, onClick: onView, color: 'text-blue-400' },
+        { label: 'Edit User', icon: Edit2, onClick: onEdit, color: 'text-brand-primary' },
+        { type: 'divider' },
+        ...(user.status === 'active'
+            ? [{ label: 'Suspend', icon: XCircle, onClick: () => onStatusChange('suspended'), color: 'text-orange-400' }]
+            : [{ label: 'Activate', icon: CheckCircle, onClick: () => onStatusChange('active'), color: 'text-green-400' }]
+        ),
+        { type: 'divider' },
+        { label: 'Delete User', icon: Trash2, onClick: onDelete, color: 'text-red-400' },
+    ];
 
     return (
-        <div className="relative">
+        <div className="relative" ref={menuRef}>
             <button
                 onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen); }}
                 className="p-1.5 rounded-lg hover:bg-white/10 text-muted hover:text-primary transition-colors"
             >
-                <Plus className={`w-4 h-4 transition-transform ${isOpen ? 'rotate-45' : ''}`} />
+                <MoreVertical className="w-4 h-4" />
             </button>
 
             {isOpen && (
-                <>
-                    <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
-                    <div className="absolute right-0 mt-2 w-48 bg-dark border border-border-muted rounded-xl shadow-2xl z-20 py-1 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
-                        <button onClick={() => { onView(); setIsOpen(false); }} className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-white/5 text-left">
-                            <Eye className="w-4 h-4 text-blue-400" /> View Details
-                        </button>
-                        <button onClick={() => { onEdit(); setIsOpen(false); }} className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-white/5 text-left">
-                            <Edit className="w-4 h-4 text-brand-primary" /> Edit User
-                        </button>
-                        {user.status === 'active' ? (
-                            <button onClick={() => { onStatusChange('suspended'); setIsOpen(false); }} className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-white/5 text-left text-orange-400">
-                                <XCircle className="w-4 h-4" /> Suspend
-                            </button>
+                <div className="absolute right-0 mt-1 w-48 bg-dark border border-border-muted rounded-xl shadow-xl z-50 py-1 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+                    {QUICK_ACTIONS.map((action, i) =>
+                        action.type === 'divider' ? (
+                            <div key={i} className="border-t border-border-muted my-1" />
                         ) : (
-                            <button onClick={() => { onStatusChange('active'); setIsOpen(false); }} className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-white/5 text-left text-green-400">
-                                <CheckCircle className="w-4 h-4" /> Activate
+                            <button
+                                key={i}
+                                onClick={() => { action.onClick?.(); setIsOpen(false); }}
+                                className={`w-full px-4 py-2 text-left text-sm hover:bg-white/5 flex items-center gap-2 ${action.color}`}
+                            >
+                                {action.icon && <action.icon className="w-4 h-4" />}
+                                {action.label}
                             </button>
-                        )}
-                        <div className="h-px bg-border-muted my-1" />
-                        <button onClick={() => { onDelete(); setIsOpen(false); }} className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-white/5 text-left text-red-400">
-                            <Trash2 className="w-4 h-4" /> Delete User
-                        </button>
-                    </div>
-                </>
+                        )
+                    )}
+                </div>
             )}
         </div>
     );
@@ -223,45 +238,49 @@ export function UsersPage() {
     const [pageSize, setPageSize] = useState(PAGINATION_CONFIG.defaultPageSize);
     const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({});
+    const [uiSettings, setUiSettings] = useState<Record<string, any>>({});
     const { activeTenant } = useTenant();
     const { showToast } = useToast();
 
-    // Load visibility settings
+    // Load UI settings
     useEffect(() => {
         const loadSettings = async () => {
             try {
                 const res = await apiFetch(`/api/v1/settings/sections/users`);
+                let settings: Record<string, any> = {};
+
                 if (res.ok) {
                     const data = await res.json();
-                    if (data.values) {
-                        const colSettings: Record<string, boolean> = {};
-                        Object.keys(data.values).forEach(key => {
-                            if (key.startsWith('users.ui.columns.show')) {
-                                colSettings[key] = data.values[key];
-                            }
-                        });
-                        setVisibleColumns(colSettings);
-                    }
+                    settings = data.values || {};
                 } else {
                     const storageKey = `settings_users_${activeTenant?.id || 'default'}`;
                     const saved = localStorage.getItem(storageKey);
-                    if (saved) {
-                        const parsed = JSON.parse(saved);
-                        const colSettings: Record<string, boolean> = {};
-                        Object.keys(parsed).forEach(key => {
-                            if (key.startsWith('users.ui.columns.show')) {
-                                colSettings[key] = parsed[key];
-                            }
-                        });
-                        setVisibleColumns(colSettings);
+                    if (saved) settings = JSON.parse(saved);
+                }
+
+                if (Object.keys(settings).length > 0) {
+                    setUiSettings(settings);
+
+                    // Set visible columns
+                    const colSettings: Record<string, boolean> = {};
+                    Object.keys(settings).forEach(key => {
+                        if (key.startsWith('users.ui.columns.show')) {
+                            colSettings[key] = settings[key];
+                        }
+                    });
+                    setVisibleColumns(colSettings);
+
+                    // Set default page size if available
+                    if (settings['users.ui.defaultPageSize']) {
+                        setPageSize(parseInt(settings['users.ui.defaultPageSize']));
                     }
                 }
             } catch (err) {
-                console.error('Failed to load user column settings', err);
+                console.error('Failed to load settings', err);
             }
         };
         loadSettings();
-    }, []);
+    }, [activeTenant?.id]);
 
     // Data fetching
     const fetchUsers = async () => {
@@ -502,77 +521,101 @@ export function UsersPage() {
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-2xl font-bold">{PAGE_CONFIG.title}</h1>
-                    <p className="text-muted text-sm mt-1">
-                        {PAGE_CONFIG.getDescription(activeTenant?.name || 'Default Tenant')}
-                    </p>
+                    <p className="text-muted text-sm mt-1">{activeTenant ? `Manage users for ${activeTenant.name}` : PAGE_CONFIG.getDescription('global')}</p>
                 </div>
-                <div className="flex gap-2">
-                    <button className="flex items-center gap-2 px-3 py-2 border border-border-muted rounded-lg hover:bg-white/5">
-                        <Upload className="w-4 h-4" />
-                        Import
-                    </button>
-                    <button className="flex items-center gap-2 px-3 py-2 border border-border-muted rounded-lg hover:bg-white/5">
-                        <Download className="w-4 h-4" />
-                        Export
-                    </button>
-                    <button
-                        onClick={handleInvite}
-                        className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-white rounded-lg font-medium hover:bg-brand-primary/90"
-                    >
-                        <PAGE_CONFIG.addButtonIcon className="w-4 h-4" />
-                        {PAGE_CONFIG.addButtonLabel}
-                    </button>
+                <div className="flex items-center gap-3">
+                    {uiSettings['users.ui.showExport'] !== false && (
+                        <button className="flex items-center gap-2 px-4 py-2 border border-border-muted rounded-xl text-sm font-medium hover:bg-white/5 transition-colors">
+                            <Download className="w-4 h-4" />
+                            Export
+                        </button>
+                    )}
+                    {uiSettings['users.ui.showImport'] !== false && (
+                        <button className="flex items-center gap-2 px-4 py-2 border border-border-muted rounded-xl text-sm font-medium hover:bg-white/5 transition-colors">
+                            <Upload className="w-4 h-4" />
+                            Import
+                        </button>
+                    )}
+                    {uiSettings['users.ui.allowInvite'] !== false && (
+                        <button
+                            onClick={handleInvite}
+                            className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-white rounded-xl text-sm font-semibold hover:bg-brand-primary/90 transition-colors"
+                        >
+                            <PAGE_CONFIG.addButtonIcon className="w-4 h-4" />
+                            {PAGE_CONFIG.addButtonLabel}
+                        </button>
+                    )}
                 </div>
             </div>
 
             {/* Stats Cards (Config-Driven) */}
-            <div className="grid grid-cols-4 gap-4">
-                {STATS_CONFIG.map((stat) => (
-                    <div key={stat.key} className="bg-dark rounded-xl border border-border-muted p-4">
-                        <div className="flex items-center gap-3">
-                            <div className={`w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center ${stat.color}`}>
-                                <stat.Icon className="w-5 h-5" />
+            {uiSettings['users.ui.showStatsCards'] !== false && (
+                <div className="grid grid-cols-4 gap-4">
+                    {STATS_CONFIG.map((stat) => {
+                        const stats = {
+                            total: users.length,
+                            active: users.filter(u => u.status === 'active').length,
+                            pending: users.filter(u => u.status === 'pending').length,
+                            roles: new Set(users.map(u => u.role)).size,
+                        };
+                        const count = stats[stat.key as keyof typeof stats] || 0;
+                        return (
+                            <div key={stat.key} className="bg-dark rounded-xl border border-border-muted p-4">
+                                <div className="flex items-center gap-3">
+                                    <div className={`w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center ${stat.color}`}>
+                                        <stat.Icon className="w-5 h-5" />
+                                    </div>
+                                    <div>
+                                        <div className="text-2xl font-bold">{count}</div>
+                                        <div className="text-xs text-muted">{stat.label}</div>
+                                    </div>
+                                </div>
                             </div>
-                            <div>
-                                <div className="text-2xl font-bold">{stats[stat.key as keyof typeof stats]}</div>
-                                <div className="text-xs text-muted">{stat.label}</div>
-                            </div>
-                        </div>
-                    </div>
-                ))}
-            </div>
+                        );
+                    })}
+                </div>
+            )}
 
             {/* Filters (Config-Driven) */}
-            <div className="flex items-center gap-4 p-4 bg-darker rounded-xl border border-border-muted">
-                <div className="relative flex-1 max-w-md">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
-                    <input
-                        type="text"
-                        placeholder={PAGE_CONFIG.searchPlaceholder}
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                    />
-                </div>
-                <select
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                    className="px-3 py-2 bg-dark border border-border-muted rounded-lg"
-                >
-                    {FILTER_CONFIG.status.options.map(opt => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                </select>
-                <select
-                    value={roleFilter}
-                    onChange={(e) => setRoleFilter(e.target.value)}
-                    className="px-3 py-2 bg-dark border border-border-muted rounded-lg"
-                >
-                    <option value="all">All Roles</option>
-                    {roles.map(role => (
-                        <option key={role.id} value={role.slug}>{role.name}</option>
-                    ))}
-                </select>
+            <div className={`flex flex-wrap items-center gap-4 p-4 bg-darker rounded-xl border border-border-muted ${(uiSettings['users.ui.showSearch'] === false && uiSettings['users.ui.showStatusFilter'] === false && uiSettings['users.ui.showRoleFilter'] === false) ? 'hidden' : ''}`}>
+                {uiSettings['users.ui.showSearch'] !== false && (
+                    <div className="relative flex-1 min-w-[200px]">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
+                        <input
+                            type="text"
+                            placeholder={PAGE_CONFIG.searchPlaceholder}
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-full pl-10 pr-4 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
+                        />
+                    </div>
+                )}
+
+                {uiSettings['users.ui.showStatusFilter'] !== false && (
+                    <select
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        className="px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
+                    >
+                        <option value="all">All Status</option>
+                        {Object.entries(STATUS_CONFIG).map(([key, config]) => (
+                            <option key={key} value={key}>{config.label}</option>
+                        ))}
+                    </select>
+                )}
+
+                {uiSettings['users.ui.showRoleFilter'] !== false && (
+                    <select
+                        value={roleFilter}
+                        onChange={(e) => setRoleFilter(e.target.value)}
+                        className="px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
+                    >
+                        <option value="all">All Roles</option>
+                        {roles.map(role => (
+                            <option key={role.id} value={role.slug}>{role.name}</option>
+                        ))}
+                    </select>
+                )}
                 {hasActiveFilters && (
                     <button onClick={clearFilters} className="flex items-center gap-2 px-3 py-2 text-muted hover:text-primary text-sm">
                         <X className="w-4 h-4" />
@@ -603,7 +646,7 @@ export function UsersPage() {
             />
 
             {/* Pagination Controls (Config-Driven) */}
-            {filteredUsers.length > 0 && (
+            {(users.length > 0 && uiSettings['users.ui.showPagination'] !== false) && (
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                         <span className="text-sm text-muted">

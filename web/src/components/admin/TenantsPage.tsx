@@ -35,6 +35,20 @@ interface Tenant {
     avatar_url?: string;
     industry?: string;
     company_size?: string;
+    tags?: string;
+    notes?: string;
+    trial_ends_at?: number;
+    suspended_at?: number;
+    suspended_reason?: string;
+    owner_id?: string;
+    owner_email?: string;
+    billing_email?: string;
+    plan_id?: string;
+    next_billing_date?: number;
+    max_users?: number;
+    max_storage?: number;
+    max_api_calls?: number;
+    created_by?: string;
 }
 
 
@@ -503,7 +517,15 @@ export function TenantsPage() {
             showSetting: 'tenants.ui.columns.showPlanName'
         },
         // Subscription columns
+        { id: 'plan_id', accessorKey: 'plan_id', header: 'Plan ID', showSetting: 'tenants.ui.columns.showPlanId' },
         { id: 'billing_status', accessorKey: 'billing_status', header: 'Billing Status', showSetting: 'tenants.ui.columns.showBillingStatus' },
+        {
+            id: 'next_billing_date',
+            accessorKey: 'next_billing_date',
+            header: 'Next Billing',
+            cell: ({ row }) => row.original.next_billing_date ? new Date(row.original.next_billing_date * 1000).toLocaleDateString() : '—',
+            showSetting: 'tenants.ui.columns.showNextBillingDate'
+        },
         {
             id: 'mrr',
             accessorKey: 'mrr',
@@ -511,7 +533,21 @@ export function TenantsPage() {
             cell: ({ row }) => <span>${(row.original.mrr || 0).toLocaleString()}</span>,
             showSetting: 'tenants.ui.columns.showMrr'
         },
-        // Usage columns
+        // Ownership
+        { id: 'owner_id', accessorKey: 'owner_id', header: 'Owner ID', showSetting: 'tenants.ui.columns.showOwnerId' },
+        { id: 'owner_email', accessorKey: 'owner_email', header: 'Owner Email', showSetting: 'tenants.ui.columns.showOwnerEmail' },
+        { id: 'billing_email', accessorKey: 'billing_email', header: 'Billing Email', showSetting: 'tenants.ui.columns.showBillingEmail' },
+        // Resource Limits
+        { id: 'max_users', accessorKey: 'max_users', header: 'Max Users', showSetting: 'tenants.ui.columns.showMaxUsers' },
+        {
+            id: 'max_storage',
+            accessorKey: 'max_storage',
+            header: 'Max Storage',
+            cell: ({ row }) => <span>{row.original.max_storage || 0} GB</span>,
+            showSetting: 'tenants.ui.columns.showMaxStorage'
+        },
+        { id: 'max_api_calls', accessorKey: 'max_api_calls', header: 'Max API Calls', showSetting: 'tenants.ui.columns.showMaxApiCalls' },
+        // Real-time Usage
         { id: 'current_users', accessorKey: 'current_users', header: 'Users', showSetting: 'tenants.ui.columns.showCurrentUsers' },
         {
             id: 'storage_used',
@@ -521,7 +557,22 @@ export function TenantsPage() {
             showSetting: 'tenants.ui.columns.showStorageUsed'
         },
         { id: 'api_calls_this_month', accessorKey: 'api_calls_this_month', header: 'API Calls', showSetting: 'tenants.ui.columns.showApiCallsThisMonth' },
-        // Dates
+        // Lifecycle & Audit
+        {
+            id: 'trial_ends_at',
+            accessorKey: 'trial_ends_at',
+            header: 'Trial Ends',
+            cell: ({ row }) => row.original.trial_ends_at ? new Date(row.original.trial_ends_at * 1000).toLocaleDateString() : '—',
+            showSetting: 'tenants.ui.columns.showTrialEndsAt'
+        },
+        {
+            id: 'suspended_at',
+            accessorKey: 'suspended_at',
+            header: 'Suspended At',
+            cell: ({ row }) => row.original.suspended_at ? new Date(row.original.suspended_at * 1000).toLocaleDateString() : '—',
+            showSetting: 'tenants.ui.columns.showSuspendedAt'
+        },
+        { id: 'suspended_reason', accessorKey: 'suspended_reason', header: 'Suspended Reason', showSetting: 'tenants.ui.columns.showSuspendedReason' },
         {
             id: 'created_at',
             accessorKey: 'created_at',
@@ -538,15 +589,52 @@ export function TenantsPage() {
             showSetting: 'tenants.ui.columns.showCreatedAt'
         },
         {
+            id: 'updated_at',
+            accessorKey: 'updated_at',
+            header: 'Updated',
+            cell: ({ row }) => row.original.updated_at ? new Date(row.original.updated_at * 1000).toLocaleDateString() : '—',
+            showSetting: 'tenants.ui.columns.showUpdatedAt'
+        },
+        {
             id: 'last_activity_at',
             accessorKey: 'last_activity_at',
             header: 'Last Activity',
             cell: ({ row }) => row.original.last_activity_at ? new Date(row.original.last_activity_at * 1000).toLocaleDateString() : '—',
             showSetting: 'tenants.ui.columns.showLastActivityAt'
         },
+        { id: 'created_by', accessorKey: 'created_by', header: 'Created By', showSetting: 'tenants.ui.columns.showCreatedBy' },
         // Metadata
         { id: 'industry', accessorKey: 'industry', header: 'Industry', showSetting: 'tenants.ui.columns.showIndustry' },
         { id: 'company_size', accessorKey: 'company_size', header: 'Size', showSetting: 'tenants.ui.columns.showCompanySize' },
+        {
+            id: 'notes',
+            accessorKey: 'notes',
+            header: 'Notes',
+            cell: ({ row }) => (
+                <span className="text-xs text-muted truncate max-w-[150px] inline-block" title={row.original.notes}>
+                    {row.original.notes || '—'}
+                </span>
+            ),
+            showSetting: 'tenants.ui.columns.showNotes'
+        },
+        {
+            id: 'tags',
+            accessorKey: 'tags',
+            header: 'Tags',
+            cell: ({ row }) => {
+                if (!row.original.tags) return '—';
+                return (
+                    <div className="flex flex-wrap gap-1">
+                        {row.original.tags.split(',').map(tag => (
+                            <span key={tag} className="px-1.5 py-0.5 bg-white/5 text-[10px] rounded uppercase font-medium">
+                                {tag.trim()}
+                            </span>
+                        ))}
+                    </div>
+                );
+            },
+            showSetting: 'tenants.ui.columns.showTags'
+        },
         // Actions
         {
             id: 'quickActions',

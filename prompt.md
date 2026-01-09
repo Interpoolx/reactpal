@@ -149,6 +149,52 @@ The Admin Hub is a "Shell". It populates itself by querying the Enabled Modules 
 - **Settings Aggregation**: The `/settings` view automatically fetches `registration.settingsRoutes` from all active modules.
 - **Studio Aesthetics**: The HPanel uses a mandatory **Dark Studio Theme** (sleek, compact, enterprise-grade). It utilizes a **Right Drawer (Sheet)** pattern for all "Quick Edit" and "Creator" flows to maintain content context.
 
+### 6b. Config-Driven UI Development (MANDATORY)
+
+**All admin pages MUST be config-driven.** Define configuration objects at the top of components and pass them to shared components. This ensures maintainability, consistency, and easy updates.
+
+```typescript
+// ✅ CORRECT: Config-driven approach
+const PAGE_CONFIG = {
+    title: 'Users',
+    description: 'Manage users for this tenant',
+    apiEndpoint: '/api/v1/users',
+    addButtonLabel: 'Invite User',
+    searchPlaceholder: 'Search by name or email...',
+};
+
+const STATS_CONFIG = [
+    { key: 'total', label: 'Total Users', Icon: Users, color: 'text-white' },
+    { key: 'active', label: 'Active', Icon: Check, color: 'text-green-400' },
+    { key: 'pending', label: 'Pending', Icon: Clock, color: 'text-blue-400' },
+];
+
+const FILTER_CONFIG = {
+    status: { label: 'All Status', options: ['all', 'active', 'pending', 'suspended'] },
+    role: { label: 'All Roles', options: ['all', 'admin', 'editor', 'viewer'] },
+};
+
+// ❌ WRONG: Hardcoded values scattered throughout component
+<h1>Users</h1> // Bad: hardcoded
+<option value="active">Active</option> // Bad: hardcoded options
+```
+
+**Key Config Patterns:**
+- `PAGE_CONFIG`: Title, description, API endpoint, button labels
+- `STATS_CONFIG`: Dashboard stat cards with icons and colors
+- `FILTER_CONFIG`: Filter dropdowns with options
+- `COLUMNS_CONFIG`: Table column definitions with render functions
+- `STATUS_COLORS`: Status badge color mappings
+- `PLAN_COLORS`: Plan/tier badge color mappings
+
+**Benefits:**
+- Change labels, colors, options in ONE place
+- Consistent patterns across ALL modules
+- Configs serve as self-documentation
+- Easy to test and validate
+- Share configs between similar pages
+
+
 ### 7. Module Inter-Communication & Dependencies
 To keep modules "Pluggable," they must never depend on each other's internal state.
 - **Rules of Engagement**: 

@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { apiFetch } from '../lib/api';
 
 interface Tenant {
     id: string;
@@ -16,16 +17,61 @@ interface TenantContextType {
 
 const TenantContext = createContext<TenantContextType | undefined>(undefined);
 
+/**
+ * Provider component for tenant context
+ * 
+ * Manages tenant selection and loading across the application. On mount:
+ * 1. Fetches all available tenants from API
+ * 2. Resolves active tenant via: URL query param > localStorage > first tenant
+ * 3. Syncs URL with selected tenant (domain/slug for readability)
+ * 
+ * The active tenant is persisted to localStorage and URL for easy restoration.
+ * Child components access tenant via useTenant() hook.
+ * 
+ * @param {Object} props - Component props
+ * @param {React.ReactNode} props.children - Child components
+ * 
+ * @example
+ * import { TenantProvider, useTenant } from '@/context/TenantContext';
+ * 
+ * function App() {
+ *   return (
+ *     <TenantProvider>
+ *       <MyComponent />
+ *     </TenantProvider>
+ *   );
+ * }
+ * 
+ * function MyComponent() {
+ *   const { activeTenant, tenants, setActiveTenant, isLoading } = useTenant();
+ *   
+ *   if (isLoading) return <div>Loading tenants...</div>;
+ *   
+ *   return (
+ *     <div>
+ *       <p>Active: {activeTenant?.name}</p>
+ *       <select onChange={(e) => {
+ *         const tenant = tenants.find(t => t.id === e.target.value);
+ *         if (tenant) setActiveTenant(tenant);
+ *       }}>
+ *         {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+ *       </select>
+ *     </div>
+ *   );
+ * }
+ */
 export function TenantProvider({ children }: { children: React.ReactNode }) {
     const [tenants, setTenants] = useState<Tenant[]>([]);
     const [activeTenant, setActiveTenantState] = useState<Tenant | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
-        fetch('/api/v1/tenants')
-            .then(res => res.json())
-            .then(data => {
-                setTenants(data);
+        const loadTenants = async () => {
+            try {
+                const response = await apiFetch('/api/v1/tenants');
+                const data = await response.json();
+                const tenantsArray = Array.isArray(data) ? data : [];
+                setTenants(tenantsArray);
 
                 // Priority: 1. URL Query Param, 2. LocalStorage, 3. Default (first)
                 const params = new URLSearchParams(window.location.search);
@@ -33,9 +79,9 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
                 const saved = localStorage.getItem('rp_active_tenant');
 
                 const targetId = urlTenant || saved;
-                const found = data.find((t: Tenant) => t.id === targetId || t.slug === targetId || t.domain === targetId);
+                const found = tenantsArray.find((t: Tenant) => t.id === targetId || t.slug === targetId || t.domain === targetId);
 
-                const initial = found || data[0] || null;
+                const initial = found || tenantsArray[0] || null;
                 setActiveTenantState(initial);
 
                 // Sync URL if missing or mismatch (Using domain/slug for readability)
@@ -47,13 +93,14 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
                         window.history.replaceState({}, '', newUrl);
                     }
                 }
-
                 setIsLoading(false);
-            })
-            .catch(err => {
+            } catch (err) {
                 console.error('Failed to load tenants', err);
                 setIsLoading(false);
-            });
+            }
+        };
+
+        loadTenants();
     }, []);
 
     const setActiveTenant = (tenant: Tenant) => {
@@ -74,6 +121,27 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
     );
 }
 
+/**
+ * Hook to access current tenant context
+ * 
+ * Must be used within a TenantProvider. Returns current tenant, all tenants, 
+ * and functions to manage active tenant selection.
+ * 
+ * @returns {TenantContextType} Tenant context with:
+ *   - activeTenant: Currently selected tenant (or null if loading)
+ *   - tenants: All available tenants
+ *   - setActiveTenant: Function to change active tenant (persists to localStorage and URL)
+ *   - isLoading: True while fetching initial tenant list
+ * @throws {Error} If not within TenantProvider
+ * 
+ * @example
+ * const { activeTenant, tenants, setActiveTenant } = useTenant();
+ * console.log(`Currently viewing: ${activeTenant?.name}`);
+ * 
+ * // Switch to a different tenant
+ * const newTenant = tenants.find(t => t.slug === 'acme-corp');
+ * if (newTenant) setActiveTenant(newTenant);
+ */
 export function useTenant() {
     const context = useContext(TenantContext);
     if (!context) throw new Error('useTenant must be used within TenantProvider');

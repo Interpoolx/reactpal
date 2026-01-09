@@ -24,5 +24,19 @@ export default defineConfig({
     build: {
         outDir: '../dist',
         emptyOutDir: true,
+        rollupOptions: {
+            output: {
+                manualChunks: {
+                    'vendor': ['react', 'react-dom'],
+                    'ui': ['lucide-react'],
+                    'admin-core': [
+                        './src/components/admin/SideNav.tsx',
+                        './src/components/admin/TopBar.tsx',
+                        './src/components/admin/DataTable.tsx',
+                    ],
+                    // Module pages are lazy loaded separately
+                },
+            },
+        },
     }
 });

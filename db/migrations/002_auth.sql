@@ -1,5 +1,5 @@
 -- users table: For admin and staff access
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY NOT NULL,
   tenant_id TEXT NOT NULL,
   username TEXT NOT NULL UNIQUE,
@@ -10,5 +10,5 @@ CREATE TABLE users (
 );
 
 -- Seed the initial admin user
-INSERT INTO users (id, tenant_id, username, password, role)
+INSERT OR IGNORE INTO users (id, tenant_id, username, password, role)
 VALUES ('u_admin', 't_001', 'admin', 'admin123', 'admin');

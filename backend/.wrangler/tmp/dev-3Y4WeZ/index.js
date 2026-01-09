@@ -1,7 +1,7 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-// .wrangler/tmp/bundle-oZEoX1/strip-cf-connecting-ip-header.js
+// .wrangler/tmp/bundle-h3dznC/strip-cf-connecting-ip-header.js
 function stripCfConnectingIPHeader(input, init) {
   const request = new Request(input, init);
   request.headers.delete("CF-Connecting-IP");
@@ -2264,7 +2264,7 @@ tenants.get("/", async (c) => {
   const db = c.env.DB;
   try {
     const results = await db.prepare(`
-            SELECT t.id, t.name, t.slug, td.domain
+            SELECT t.id, t.name, t.slug, t.status, td.domain
             FROM tenants t
             LEFT JOIN tenant_domains td ON t.id = td.tenant_id AND td.is_primary = 1
             ORDER BY t.name ASC
@@ -2272,6 +2272,95 @@ tenants.get("/", async (c) => {
     return c.json(results.results);
   } catch (error) {
     return c.json({ error: "Failed to fetch tenants" }, 500);
+  }
+});
+tenants.get("/:id", async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  try {
+    const tenant = await db.prepare(`
+            SELECT t.id, t.name, t.slug, t.status, t.config, td.domain
+            FROM tenants t
+            LEFT JOIN tenant_domains td ON t.id = td.tenant_id AND td.is_primary = 1
+            WHERE t.id = ?
+        `).bind(id).first();
+    if (!tenant) {
+      return c.json({ error: "Tenant not found" }, 404);
+    }
+    return c.json(tenant);
+  } catch (error) {
+    return c.json({ error: "Failed to fetch tenant", message: error.message }, 500);
+  }
+});
+tenants.post("/", async (c) => {
+  const db = c.env.DB;
+  const kv = c.env.TENANT_MANIFESTS;
+  const body = await c.req.json();
+  const { name, slug, domain } = body;
+  if (!name || !slug) {
+    return c.json({ error: "Name and slug are required" }, 400);
+  }
+  const id = crypto.randomUUID();
+  const config = {};
+  try {
+    await db.prepare(`
+            INSERT INTO tenants (id, name, slug, config, status)
+            VALUES (?, ?, ?, ?, 'active')
+        `).bind(id, name, slug, JSON.stringify(config)).run();
+    if (domain) {
+      await db.prepare(`
+                INSERT INTO tenant_domains (id, tenant_id, domain, is_primary)
+                VALUES (?, ?, ?, 1)
+            `).bind(crypto.randomUUID(), id, domain).run();
+      await kv.put(`tenant:${domain}`, JSON.stringify({ id, name, slug, domain }));
+    }
+    return c.json({ id, name, slug, domain, status: "active" }, 201);
+  } catch (error) {
+    if (error.message?.includes("UNIQUE constraint failed")) {
+      return c.json({ error: "Slug or domain already exists" }, 409);
+    }
+    return c.json({ error: "Failed to create tenant", message: error.message }, 500);
+  }
+});
+tenants.patch("/:id", async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  const body = await c.req.json();
+  const { name, slug, status } = body;
+  const updates = [];
+  const params = [];
+  if (name) {
+    updates.push("name = ?");
+    params.push(name);
+  }
+  if (slug) {
+    updates.push("slug = ?");
+    params.push(slug);
+  }
+  if (status) {
+    updates.push("status = ?");
+    params.push(status);
+  }
+  if (updates.length === 0) {
+    return c.json({ error: "No fields to update" }, 400);
+  }
+  params.push(id);
+  try {
+    await db.prepare(`UPDATE tenants SET ${updates.join(", ")} WHERE id = ?`).bind(...params).run();
+    return c.json({ success: true });
+  } catch (error) {
+    return c.json({ error: "Failed to update tenant", message: error.message }, 500);
+  }
+});
+tenants.delete("/:id", async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  try {
+    await db.prepare("DELETE FROM tenant_domains WHERE tenant_id = ?").bind(id).run();
+    await db.prepare("DELETE FROM tenants WHERE id = ?").bind(id).run();
+    return c.json({ success: true });
+  } catch (error) {
+    return c.json({ error: "Failed to delete tenant", message: error.message }, 500);
   }
 });
 var tenants_default = tenants;
@@ -2326,6 +2415,384 @@ resolver.get("/resolve-tenant", (c) => {
 });
 var resolver_default = resolver;
 
+// src/routes/v1/users.ts
+var users = new Hono2();
+users.get("/", async (c) => {
+  const db = c.env.DB;
+  const tenantId = c.req.query("tenantId");
+  try {
+    let query = "SELECT id, username, role, created_at FROM users";
+    const params = [];
+    if (tenantId && tenantId !== "default") {
+      query += " WHERE tenant_id = ?";
+      params.push(tenantId);
+    }
+    query += " ORDER BY created_at DESC";
+    const results = await db.prepare(query).bind(...params).all();
+    return c.json(results.results);
+  } catch (error) {
+    return c.json({ error: "Failed to fetch users", message: error.message }, 500);
+  }
+});
+users.get("/:id", async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  try {
+    const user = await db.prepare("SELECT id, username, role, created_at FROM users WHERE id = ?").bind(id).first();
+    if (!user) {
+      return c.json({ error: "User not found" }, 404);
+    }
+    return c.json(user);
+  } catch (error) {
+    return c.json({ error: "Failed to fetch user", message: error.message }, 500);
+  }
+});
+users.post("/", async (c) => {
+  const db = c.env.DB;
+  const body = await c.req.json();
+  const { username, password, role = "viewer", tenantId } = body;
+  if (!username || !password) {
+    return c.json({ error: "Username and password are required" }, 400);
+  }
+  const id = crypto.randomUUID();
+  const createdAt = Math.floor(Date.now() / 1e3);
+  try {
+    await db.prepare(`
+            INSERT INTO users (id, username, password, role, tenant_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(id, username, password, role, tenantId || "default", createdAt).run();
+    return c.json({ id, username, role, created_at: createdAt }, 201);
+  } catch (error) {
+    if (error.message?.includes("UNIQUE constraint failed")) {
+      return c.json({ error: "Username already exists" }, 409);
+    }
+    return c.json({ error: "Failed to create user", message: error.message }, 500);
+  }
+});
+users.patch("/:id", async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  const body = await c.req.json();
+  const { username, password, role } = body;
+  const updates = [];
+  const params = [];
+  if (username) {
+    updates.push("username = ?");
+    params.push(username);
+  }
+  if (password) {
+    updates.push("password = ?");
+    params.push(password);
+  }
+  if (role) {
+    updates.push("role = ?");
+    params.push(role);
+  }
+  if (updates.length === 0) {
+    return c.json({ error: "No fields to update" }, 400);
+  }
+  params.push(id);
+  try {
+    await db.prepare(`UPDATE users SET ${updates.join(", ")} WHERE id = ?`).bind(...params).run();
+    return c.json({ success: true });
+  } catch (error) {
+    return c.json({ error: "Failed to update user", message: error.message }, 500);
+  }
+});
+users.delete("/:id", async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  try {
+    await db.prepare("DELETE FROM users WHERE id = ?").bind(id).run();
+    return c.json({ success: true });
+  } catch (error) {
+    return c.json({ error: "Failed to delete user", message: error.message }, 500);
+  }
+});
+users.post("/bulk-delete", async (c) => {
+  const db = c.env.DB;
+  const { ids } = await c.req.json();
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return c.json({ error: "IDs array is required" }, 400);
+  }
+  try {
+    const placeholders = ids.map(() => "?").join(", ");
+    await db.prepare(`DELETE FROM users WHERE id IN (${placeholders})`).bind(...ids).run();
+    return c.json({ success: true, deleted: ids.length });
+  } catch (error) {
+    return c.json({ error: "Failed to delete users", message: error.message }, 500);
+  }
+});
+var users_default = users;
+
+// ../packages/modules-auth/src/module.config.ts
+var moduleConfig = {
+  id: "auth",
+  name: "Authentication",
+  description: "Login, sessions, password management, and security policies",
+  longDescription: "Comprehensive authentication system with multi-factor support, session management, password policies, and security event logging.",
+  icon: "Shield",
+  version: "1.0.0",
+  category: "core",
+  isCore: true,
+  features: [
+    "Login/Logout",
+    "Session Management",
+    "Password Policies",
+    "Security Events",
+    "Multi-Factor Authentication"
+  ],
+  dependencies: [],
+  tags: ["security", "auth", "login"]
+};
+
+// ../packages/modules-users/src/module.config.ts
+var moduleConfig2 = {
+  id: "users",
+  name: "Users",
+  description: "User management, roles, permissions, and invitations",
+  longDescription: "Full user lifecycle management including RBAC, team invitations, and GDPR compliance features.",
+  icon: "Users",
+  version: "1.0.0",
+  category: "core",
+  isCore: true,
+  features: [
+    "User CRUD",
+    "Role Management",
+    "Invitations",
+    "GDPR Export",
+    "User Profiles"
+  ],
+  dependencies: ["auth"],
+  tags: ["users", "rbac", "permissions"]
+};
+
+// ../packages/modules-tenants/src/module.config.ts
+var moduleConfig3 = {
+  id: "tenants",
+  name: "Tenants",
+  description: "Multi-tenant management and provisioning (Platform Admin)",
+  longDescription: "Complete multi-tenancy infrastructure with provisioning, billing integration, and usage tracking.",
+  icon: "Building2",
+  version: "1.0.0",
+  category: "core",
+  isCore: true,
+  features: [
+    "Tenant CRUD",
+    "Module Assignment",
+    "Usage Tracking",
+    "Billing Integration",
+    "Domain Management"
+  ],
+  dependencies: ["auth", "users"],
+  tags: ["platform", "multitenancy", "tenants"]
+};
+
+// src/routes/v1/modules.ts
+function registerModulesRoutes(app2) {
+  const modules = new Hono2();
+  const ALL_MODULES = [
+    moduleConfig,
+    moduleConfig2,
+    moduleConfig3
+    // NEW MODULES: Import and add here when creating new module packages
+    // e.g., import { moduleConfig as cmsConfig } from '@reactpal/modules-cms/src/module.config';
+  ];
+  modules.get("/", async (c) => {
+    const db = c.env.DB;
+    try {
+      const stats = await db.prepare(`
+        SELECT module_id, COUNT(*) as tenant_count 
+        FROM module_status 
+        WHERE enabled = 1 
+        GROUP BY module_id
+      `).all();
+      const statsByModule = {};
+      for (const row of stats.results || []) {
+        statsByModule[row.module_id] = row.tenant_count;
+      }
+      const tenantCount = await db.prepare("SELECT COUNT(*) as count FROM tenants WHERE deleted_at IS NULL").first();
+      const modulesWithStats = ALL_MODULES.map((mod) => ({
+        ...mod,
+        tenantsEnabled: statsByModule[mod.id] || 0,
+        totalTenants: tenantCount?.count || 0,
+        platformEnabled: mod.isCore || (statsByModule[mod.id] || 0) > 0,
+        status: mod.isCore ? "enabled" : statsByModule[mod.id] > 0 ? "enabled" : "available"
+      }));
+      return c.json(modulesWithStats);
+    } catch (error) {
+      console.error("Failed to get modules:", error);
+      return c.json(ALL_MODULES.map((m) => ({ ...m, tenantsEnabled: 0, platformEnabled: m.isCore })));
+    }
+  });
+  modules.get("/stats", async (c) => {
+    const db = c.env.DB;
+    try {
+      const enabledCount = await db.prepare(`
+        SELECT COUNT(DISTINCT module_id) as count 
+        FROM module_status 
+        WHERE enabled = 1
+      `).first();
+      return c.json({
+        total: ALL_MODULES.length,
+        core: ALL_MODULES.filter((m) => m.isCore).length,
+        enabled: enabledCount?.count || 0,
+        available: ALL_MODULES.filter((m) => !m.isCore).length
+      });
+    } catch (error) {
+      return c.json({ total: ALL_MODULES.length, core: 3, enabled: 0, available: 4 });
+    }
+  });
+  modules.get("/menu", async (c) => {
+    const db = c.env.DB;
+    const tenantId = c.req.query("tenantId");
+    const isSuperAdmin = true;
+    try {
+      const menuItems = [
+        { label: "Dashboard", icon: "LayoutDashboard", href: "/hpanel", order: 0 },
+        { label: "Modules", icon: "Package", href: "/hpanel/modules", order: 5 },
+        { label: "Tenants", icon: "Building2", href: "/hpanel/tenants", order: 10 }
+      ];
+      menuItems.push({ label: "Users", icon: "Users", href: "/hpanel/users", order: 20 });
+      menuItems.push({ label: "Security", icon: "Shield", href: "/hpanel/security", order: 30 });
+      if (tenantId) {
+        const enabledModules = await db.prepare(`
+          SELECT module_id FROM module_status 
+          WHERE tenant_id = ? AND enabled = 1
+        `).bind(tenantId).all();
+        const moduleMenuMap = {
+          cms: { label: "CMS", icon: "FileText", href: "/hpanel/cms", order: 40 },
+          crm: { label: "CRM", icon: "Contact", href: "/hpanel/crm", order: 50 },
+          seo: { label: "SEO", icon: "Search", href: "/hpanel/seo", order: 60 },
+          analytics: { label: "Analytics", icon: "BarChart3", href: "/hpanel/analytics", order: 70 }
+        };
+        for (const row of enabledModules.results || []) {
+          const moduleId = row.module_id;
+          if (moduleMenuMap[moduleId]) {
+            menuItems.push(moduleMenuMap[moduleId]);
+          }
+        }
+      }
+      menuItems.push({ label: "Settings", icon: "Settings", href: "/hpanel/settings", order: 100 });
+      return c.json(menuItems.sort((a, b) => a.order - b.order));
+    } catch (error) {
+      console.error("Failed to get module menu:", error);
+      return c.json([
+        { label: "Dashboard", icon: "LayoutDashboard", href: "/hpanel", order: 0 },
+        { label: "Modules", icon: "Package", href: "/hpanel/modules", order: 5 },
+        { label: "Settings", icon: "Settings", href: "/hpanel/settings", order: 100 }
+      ]);
+    }
+  });
+  modules.get("/status", async (c) => {
+    const db = c.env.DB;
+    const tenantId = c.req.query("tenantId");
+    const moduleId = c.req.query("moduleId");
+    try {
+      let query = "SELECT module_id, tenant_id, enabled, enabled_at, enabled_by FROM module_status";
+      const params = [];
+      if (tenantId) {
+        query += " WHERE tenant_id = ?";
+        params.push(tenantId);
+      } else if (moduleId) {
+        query += " WHERE module_id = ?";
+        params.push(moduleId);
+      }
+      const statuses = await db.prepare(query).bind(...params).all();
+      return c.json(statuses.results);
+    } catch (error) {
+      return c.json([]);
+    }
+  });
+  modules.get("/:id", async (c) => {
+    const db = c.env.DB;
+    const moduleId = c.req.param("id");
+    const module = ALL_MODULES.find((m) => m.id === moduleId);
+    if (!module) {
+      return c.json({ error: "Module not found" }, 404);
+    }
+    try {
+      const stats = await db.prepare(`
+        SELECT COUNT(*) as enabled_count 
+        FROM module_status 
+        WHERE module_id = ? AND enabled = 1
+      `).bind(moduleId).first();
+      const tenantStatuses = await db.prepare(`
+        SELECT t.id, t.name, t.domain, ms.enabled, ms.enabled_at, ms.enabled_by
+        FROM tenants t
+        LEFT JOIN module_status ms ON t.id = ms.tenant_id AND ms.module_id = ?
+        WHERE t.deleted_at IS NULL
+      `).bind(moduleId).all();
+      return c.json({
+        ...module,
+        tenantsEnabled: stats?.enabled_count || 0,
+        tenants: tenantStatuses.results
+      });
+    } catch (error) {
+      return c.json({ ...module, tenantsEnabled: 0, tenants: [] });
+    }
+  });
+  modules.post("/:id/enable", async (c) => {
+    const db = c.env.DB;
+    const moduleId = c.req.param("id");
+    const { enabledBy } = await c.req.json();
+    try {
+      const tenants2 = await db.prepare("SELECT id FROM tenants WHERE deleted_at IS NULL").all();
+      for (const tenant of tenants2.results || []) {
+        await db.prepare(`
+          INSERT INTO module_status (id, module_id, tenant_id, enabled, enabled_at, enabled_by, created_at)
+          VALUES (?, ?, ?, 1, ?, ?, ?)
+          ON CONFLICT(module_id, tenant_id) DO UPDATE SET enabled = 1, enabled_at = ?, enabled_by = ?
+        `).bind(
+          crypto.randomUUID(),
+          moduleId,
+          tenant.id,
+          Math.floor(Date.now() / 1e3),
+          enabledBy || "admin",
+          Math.floor(Date.now() / 1e3),
+          Math.floor(Date.now() / 1e3),
+          enabledBy || "admin"
+        ).run();
+      }
+      return c.json({ success: true, tenantsEnabled: tenants2.results?.length || 0 });
+    } catch (error) {
+      return c.json({ error: "Failed to enable module", message: error.message }, 500);
+    }
+  });
+  modules.post("/:id/disable", async (c) => {
+    const db = c.env.DB;
+    const moduleId = c.req.param("id");
+    try {
+      await db.prepare(`
+        UPDATE module_status SET enabled = 0, updated_at = ?
+        WHERE module_id = ?
+      `).bind(Math.floor(Date.now() / 1e3), moduleId).run();
+      return c.json({ success: true });
+    } catch (error) {
+      return c.json({ error: "Failed to disable module", message: error.message }, 500);
+    }
+  });
+  modules.get("/:id/tenants", async (c) => {
+    const db = c.env.DB;
+    const moduleId = c.req.param("id");
+    try {
+      const tenants2 = await db.prepare(`
+        SELECT t.id, t.name, t.domain, t.slug, t.status,
+               ms.enabled, ms.enabled_at, ms.enabled_by
+        FROM tenants t
+        LEFT JOIN module_status ms ON t.id = ms.tenant_id AND ms.module_id = ?
+        WHERE t.deleted_at IS NULL
+        ORDER BY t.name
+      `).bind(moduleId).all();
+      return c.json(tenants2.results);
+    } catch (error) {
+      return c.json([]);
+    }
+  });
+  app2.route("/api/v1/modules", modules);
+}
+__name(registerModulesRoutes, "registerModulesRoutes");
+
 // src/index.ts
 var app = new Hono2();
 app.use("*", cors());
@@ -2333,7 +2800,9 @@ app.use("*", tenantResolverMiddleware);
 app.use("*", adminAuthMiddleware);
 app.route("/api/v1/auth", auth_default);
 app.route("/api/v1/tenants", tenants_default);
+app.route("/api/v1/users", users_default);
 app.route("/api/v1/resolver", resolver_default);
+registerModulesRoutes(app);
 app.get("/health", (c) => c.json({ status: "ok", timestamp: (/* @__PURE__ */ new Date()).toISOString() }));
 app.onError((err, c) => {
   console.error(err);
@@ -2382,7 +2851,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-oZEoX1/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-h3dznC/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -2414,7 +2883,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-oZEoX1/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-h3dznC/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

@@ -12,6 +12,14 @@
     },
     "dependencies": {
         "@reactpress/shared": "file:../packages/shared",
+        "@reactpress/core-registry": "file:../packages/core-registry",
+        "@reactpress/modules-auth": "file:../packages/modules-auth",
+        "@reactpress/modules-users": "file:../packages/modules-users",
+        "@reactpress/modules-tenants": "file:../packages/modules-tenants",
+        "@reactpress/modules-core": "file:../packages/modules-core",
+        "@reactpress/modules-cms": "file:../packages/modules-cms",
+        "@reactpress/modules-crm": "file:../packages/modules-crm",
+        "@reactpress/modules-seo": "file:../packages/modules-seo",
         "hono": "^4.7.2",
         "drizzle-orm": "^0.45.x",
         "zod": "^3.24.1"

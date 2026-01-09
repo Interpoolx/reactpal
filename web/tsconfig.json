@@ -23,6 +23,15 @@
         "paths": {
             "@/*": [
                 "./src/*"
+            ],
+            "@reactpress/shared": [
+                "../packages/shared/src/index.ts"
+            ],
+            "@reactpress/core-registry": [
+                "../packages/core-registry/src/index.ts"
+            ],
+            "@reactpress/modules-*": [
+                "../packages/modules-*/src/index.ts"
             ]
         }
     },

@@ -1,5 +1,29 @@
 import { type Context, type Next } from 'hono';
 
+/**
+ * Middleware to resolve tenant from incoming request
+ * 
+ * Resolves tenant using multiple strategies (in order):
+ * 1. Query parameter (?tenant=id or ?tenantId=id) - for manual override/debugging
+ * 2. KV manifest cache (edge performance) - checks tenant:domain key
+ * 3. Database fallback - queries tenant_domains table
+ * 4. Default tenant - falls back to 'default' tenant if no match
+ * 
+ * Sets `c.set('tenant', tenantObject)` and `c.set('tenantId', id)` for downstream handlers
+ * 
+ * @param {Context} c - Hono context
+ * @param {Next} next - Next middleware function
+ * 
+ * @example
+ * // In Hono router setup:
+ * app.use('*', tenantResolverMiddleware);
+ * 
+ * // In a route handler:
+ * app.get('/api/data', async (c) => {
+ *   const tenantId = c.get('tenantId'); // 'default' or resolved tenant id
+ *   const tenant = c.get('tenant');     // full tenant object (may be undefined)
+ * });
+ */
 export async function tenantResolverMiddleware(c: Context, next: Next) {
     const host = c.req.header('host') || '';
     const domain = host.split(':')[0]; // Remove port

@@ -1,0 +1,1117 @@
+import React, { useState, useEffect } from 'react';
+import {
+    Settings, Palette, Plug, Bell, Key, FileText, Contact,
+    Search as SearchIcon, Users, Shield, ChevronRight
+} from 'lucide-react';
+import { useTenant } from '../../context/TenantContext';
+import { apiFetch } from '../../lib/api';
+import { useToast } from '../ui/Toast';
+
+interface Tab {
+    id: string;
+    label: string;
+    icon: any;
+    category: 'core' | 'module';
+    moduleId?: string;
+}
+
+export function SettingsPage() {
+    const [activeTab, setActiveTab] = useState('general');
+    const { activeTenant } = useTenant();
+    const [enabledModules, setEnabledModules] = useState<string[]>([]);
+    const [settingsKey, setSettingsKey] = useState(0); // Force re-render on tenant change
+
+    // Core tabs (always visible)
+    const coreTabs: Tab[] = [
+        { id: 'general', label: 'General', icon: Settings, category: 'core' },
+        { id: 'appearance', label: 'Appearance', icon: Palette, category: 'core' },
+        { id: 'integrations', label: 'Integrations', icon: Plug, category: 'core' },
+        { id: 'notifications', label: 'Notifications', icon: Bell, category: 'core' },
+        { id: 'api', label: 'API Keys', icon: Key, category: 'core' },
+    ];
+
+    // Core module tabs (always visible - these are core infrastructure)
+    const coreModuleTabs: Tab[] = [
+        { id: 'auth', label: 'Authentication', icon: Shield, category: 'module', moduleId: 'auth' },
+        { id: 'users', label: 'Users', icon: Users, category: 'module', moduleId: 'users' },
+        { id: 'tenants', label: 'Tenants', icon: Settings, category: 'module', moduleId: 'tenants' },
+    ];
+
+    // Feature module tabs (shown based on enabled modules)
+    const featureModuleTabs: Tab[] = [
+        { id: 'cms', label: 'CMS', icon: FileText, category: 'module', moduleId: 'cms' },
+        { id: 'crm', label: 'CRM', icon: Contact, category: 'module', moduleId: 'crm' },
+        { id: 'seo', label: 'SEO', icon: SearchIcon, category: 'module', moduleId: 'seo' },
+    ];
+
+    // Combine all module tabs
+    const moduleTabs = [...coreModuleTabs, ...featureModuleTabs];
+
+    // Sync active tab with URL
+    const handleTabChange = (tabId: string) => {
+        setActiveTab(tabId);
+        const url = new URL(window.location.href);
+        url.searchParams.set('module', tabId);
+        window.history.pushState({}, '', url.toString());
+    };
+
+    // Read tab from URL on load
+    useEffect(() => {
+        const url = new URL(window.location.href);
+        const moduleParam = url.searchParams.get('module');
+        if (moduleParam) {
+            setActiveTab(moduleParam);
+        }
+    }, []);
+
+    useEffect(() => {
+        // Force refresh settings when tenant changes
+        setSettingsKey(prev => prev + 1);
+        // Don't reset to general - keep current tab
+        loadEnabledModules();
+    }, [activeTenant?.id]);
+
+    const loadEnabledModules = async () => {
+        try {
+            const res = await apiFetch(`/api/v1/modules/status?tenantId=${activeTenant?.id || 'default'}`);
+            if (res.ok) {
+                const data = await res.json();
+                const enabled = data.filter((m: any) => m.enabled).map((m: any) => m.module_id);
+                setEnabledModules(enabled);
+            } else {
+                setEnabledModules([]);
+            }
+        } catch (error) {
+            console.error('Failed to load modules:', error);
+            setEnabledModules([]);
+        }
+    };
+
+    // Core module tabs always visible (core infrastructure)
+    // Feature module tabs only when enabled for this tenant
+    const visibleFeatureModuleTabs = featureModuleTabs.filter(tab =>
+        tab.moduleId && enabledModules.includes(tab.moduleId)
+    );
+
+    // All module tabs = core modules (always) + enabled feature modules
+    const visibleModuleTabs = [...coreModuleTabs, ...visibleFeatureModuleTabs];
+
+    const allTabs = [...coreTabs, ...visibleModuleTabs];
+
+    return (
+        <div className="p-6" key={settingsKey}>
+            <div className="mb-6">
+                <h1 className="text-2xl font-bold">Settings</h1>
+                <p className="text-muted text-sm mt-1">
+                    Configure settings for <span className="text-primary font-medium">{activeTenant?.name || 'Default Tenant'}</span>
+                </p>
+            </div>
+
+            <div className="flex gap-6">
+                {/* Vertical Tabs */}
+                <div className="w-56 flex-shrink-0">
+                    <nav className="space-y-1 bg-darker rounded-xl border border-border-muted p-2">
+                        {/* Core Settings */}
+                        <div className="px-3 py-2 text-[10px] font-bold text-muted uppercase tracking-wider">
+                            Core Settings
+                        </div>
+                        {coreTabs.map((tab) => (
+                            <button
+                                key={tab.id}
+                                onClick={() => handleTabChange(tab.id)}
+                                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === tab.id
+                                    ? 'bg-brand-primary/20 text-brand-primary'
+                                    : 'text-muted hover:text-primary hover:bg-white/5'
+                                    }`}
+                            >
+                                <tab.icon className="w-4 h-4" />
+                                {tab.label}
+                            </button>
+                        ))}
+
+                        {/* Module Settings */}
+                        {visibleModuleTabs.length > 0 && (
+                            <>
+                                <div className="px-3 py-2 mt-4 text-[10px] font-bold text-muted uppercase tracking-wider border-t border-border-muted pt-4">
+                                    Module Settings
+                                </div>
+                                {visibleModuleTabs.map((tab) => (
+                                    <button
+                                        key={tab.id}
+                                        onClick={() => handleTabChange(tab.id)}
+                                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === tab.id
+                                            ? 'bg-brand-primary/20 text-brand-primary'
+                                            : 'text-muted hover:text-primary hover:bg-white/5'
+                                            }`}
+                                    >
+                                        <tab.icon className="w-4 h-4" />
+                                        {tab.label}
+                                        <ChevronRight className="w-3 h-3 ml-auto" />
+                                    </button>
+                                ))}
+                            </>
+                        )}
+                    </nav>
+                </div>
+
+                {/* Tab Content */}
+                <div className="flex-1 bg-darker rounded-xl border border-border-muted p-6">
+                    {activeTab === 'general' && <GeneralSettings key={`general-${activeTenant?.id}`} />}
+                    {activeTab === 'appearance' && <AppearanceSettings />}
+                    {activeTab === 'integrations' && <IntegrationsSettings />}
+                    {activeTab === 'notifications' && <NotificationsSettings />}
+                    {activeTab === 'api' && <ApiSettings />}
+                    {/* Core Modules */}
+                    {activeTab === 'auth' && <AuthSettings />}
+                    {activeTab === 'users' && <UsersSettings />}
+                    {activeTab === 'tenants' && <TenantsSettings />}
+                    {/* Feature Modules */}
+                    {activeTab === 'cms' && <CMSSettings />}
+                    {activeTab === 'crm' && <CRMSettings />}
+                    {activeTab === 'seo' && <SEOSettings />}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function GeneralSettings() {
+    const { activeTenant } = useTenant();
+    const [siteName, setSiteName] = useState(activeTenant?.name || '');
+    const [siteUrl, setSiteUrl] = useState(activeTenant?.domain || '');
+    const [tagline, setTagline] = useState('');
+    const [timezone, setTimezone] = useState('UTC');
+
+    useEffect(() => {
+        // Load settings when tenant changes
+        setSiteName(activeTenant?.name || '');
+        setSiteUrl(activeTenant?.domain || '');
+    }, [activeTenant]);
+
+    return (
+        <div className="space-y-6">
+            <h2 className="text-lg font-semibold">General Settings</h2>
+            <div className="grid gap-4 max-w-md">
+                <div>
+                    <label className="block text-sm font-medium mb-1">Site Name</label>
+                    <input
+                        type="text"
+                        value={siteName}
+                        onChange={(e) => setSiteName(e.target.value)}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium mb-1">Site URL</label>
+                    <input
+                        type="text"
+                        value={siteUrl}
+                        onChange={(e) => setSiteUrl(e.target.value)}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium mb-1">Tagline</label>
+                    <input
+                        type="text"
+                        value={tagline}
+                        onChange={(e) => setTagline(e.target.value)}
+                        placeholder="A brief description of your site"
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium mb-1">Timezone</label>
+                    <select
+                        value={timezone}
+                        onChange={(e) => setTimezone(e.target.value)}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    >
+                        <option value="UTC">UTC</option>
+                        <option value="America/New_York">America/New_York</option>
+                        <option value="Europe/London">Europe/London</option>
+                        <option value="Asia/Kolkata">Asia/Kolkata</option>
+                    </select>
+                </div>
+                <button className="px-4 py-2 bg-brand-primary text-white rounded-lg font-semibold hover:bg-brand-primary/90 transition-colors w-fit">
+                    Save Changes
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function AppearanceSettings() {
+    const [theme, setTheme] = useState('dark');
+    const [primaryColor, setPrimaryColor] = useState('#6366f1');
+
+    return (
+        <div className="space-y-6">
+            <h2 className="text-lg font-semibold">Appearance</h2>
+            <div className="grid gap-4 max-w-md">
+                <div>
+                    <label className="block text-sm font-medium mb-1">Theme</label>
+                    <select
+                        value={theme}
+                        onChange={(e) => setTheme(e.target.value)}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    >
+                        <option value="dark">Dark</option>
+                        <option value="light">Light</option>
+                        <option value="system">System</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-sm font-medium mb-1">Primary Color</label>
+                    <div className="flex gap-2">
+                        <input
+                            type="color"
+                            value={primaryColor}
+                            onChange={(e) => setPrimaryColor(e.target.value)}
+                            className="w-10 h-10 rounded-lg border border-border-muted cursor-pointer"
+                        />
+                        <input
+                            type="text"
+                            value={primaryColor}
+                            onChange={(e) => setPrimaryColor(e.target.value)}
+                            className="flex-1 px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                        />
+                    </div>
+                </div>
+                <button className="px-4 py-2 bg-brand-primary text-white rounded-lg font-semibold hover:bg-brand-primary/90 transition-colors w-fit">
+                    Save Changes
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function UsersSettings() {
+    // This component renders Users Admin UI settings from the auth module
+    // Settings are defined in packages/modules-auth/src/settings/authSettings.ts
+    return (
+        <DynamicModuleSettings
+            moduleId="users"
+            title="Users Settings"
+            description="Configure user management options"
+            filterGroups={['Users Admin UI', 'Users Table Columns']}
+        />
+    );
+}
+
+// ============================================================================
+// DYNAMIC SETTINGS RENDERER
+// Fetches and renders settings from module definitions
+// ============================================================================
+
+interface SettingFieldDef {
+    key: string;
+    label: string;
+    type: 'text' | 'number' | 'boolean' | 'select' | 'color' | 'textarea';
+    description?: string;
+    defaultValue: any;
+    options?: Array<{ label: string; value: any }>;
+    group?: string;
+}
+
+interface DynamicModuleSettingsProps {
+    moduleId: string;
+    title: string;
+    description?: string;
+    filterGroups?: string[]; // Only show settings from these groups
+}
+
+function DynamicModuleSettings({ moduleId, title, description, filterGroups }: DynamicModuleSettingsProps) {
+    const [settings, setSettings] = useState<Record<string, any>>({});
+    const [fields, setFields] = useState<SettingFieldDef[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isSaving, setIsSaving] = useState(false);
+    const { activeTenant } = useTenant();
+
+    useEffect(() => {
+        loadSettings();
+    }, [moduleId, activeTenant?.id]);
+
+    // Helper to apply fallback fields
+    const applyFallbackFields = () => {
+        let fallbackFields: SettingFieldDef[] = [];
+
+        if (moduleId === 'users') {
+            fallbackFields = getUsersAdminUIFields();
+        } else if (moduleId === 'tenants') {
+            fallbackFields = getTenantsAdminUIFields();
+        }
+
+        if (fallbackFields.length > 0) {
+            // Filter by groups if specified
+            if (filterGroups && filterGroups.length > 0) {
+                fallbackFields = fallbackFields.filter((f) =>
+                    f.group && filterGroups.includes(f.group)
+                );
+            }
+            setFields(fallbackFields);
+            const initialValues: Record<string, any> = {};
+            fallbackFields.forEach((field) => {
+                initialValues[field.key] = field.defaultValue;
+            });
+
+            // Load any saved settings from localStorage
+            const storageKey = `settings_${moduleId}_${activeTenant?.id || 'default'}`;
+            const savedSettings = localStorage.getItem(storageKey);
+            if (savedSettings) {
+                try {
+                    const parsed = JSON.parse(savedSettings);
+                    Object.assign(initialValues, parsed);
+                } catch { }
+            }
+
+            setSettings(initialValues);
+        }
+    };
+
+    const loadSettings = async () => {
+        setIsLoading(true);
+        try {
+            // Fetch settings schema from API
+            const res = await apiFetch(`/api/v1/settings/sections/${moduleId}?tenantId=${activeTenant?.id || 'default'}`);
+            if (res.ok) {
+                const data = await res.json();
+                let fieldsData = data.fields || [];
+
+                // Filter by groups if specified
+                if (filterGroups && filterGroups.length > 0) {
+                    fieldsData = fieldsData.filter((f: SettingFieldDef) =>
+                        f.group && filterGroups.includes(f.group)
+                    );
+                }
+
+                setFields(fieldsData);
+
+                // Initialize values: defaults -> DB values
+                const initialValues: Record<string, any> = {};
+                fieldsData.forEach((field: SettingFieldDef) => {
+                    initialValues[field.key] = field.defaultValue;
+                });
+
+                // Overlay values from DB
+                if (data.values) {
+                    Object.keys(data.values).forEach(key => {
+                        if (data.values[key] !== undefined) {
+                            initialValues[key] = data.values[key];
+                        }
+                    });
+                }
+
+                setSettings(initialValues);
+            } else {
+                // API returned 404 or error - use fallback
+                console.log(`Settings API not available for ${moduleId}, using fallback`);
+                applyFallbackFields();
+            }
+        } catch (err) {
+            console.error('Failed to load settings:', err);
+            // Use fallback hardcoded fields
+            applyFallbackFields();
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleChange = (key: string, value: any) => {
+        setSettings(prev => ({ ...prev, [key]: value }));
+    };
+
+    const { showToast } = useToast();
+
+    const handleSave = async () => {
+        setIsSaving(true);
+        try {
+            // Save to localStorage as fallback (API may not exist yet)
+            const storageKey = `settings_${moduleId}_${activeTenant?.id || 'default'}`;
+            localStorage.setItem(storageKey, JSON.stringify(settings));
+
+            // Try API save (may fail if endpoint doesn't exist)
+            try {
+                await apiFetch(`/api/v1/settings`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tenantId: activeTenant?.id || 'default',
+                        moduleId,
+                        settings,
+                    }),
+                });
+            } catch {
+                // API not available, localStorage saved
+            }
+
+            showToast('Settings saved successfully!', 'success');
+        } catch (err) {
+            console.error('Failed to save settings:', err);
+            showToast('Failed to save settings', 'error');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    // Group fields by group property
+    const groupedFields = fields.reduce((acc, field) => {
+        const group = field.group || 'General';
+        if (!acc[group]) acc[group] = [];
+        acc[group].push(field);
+        return acc;
+    }, {} as Record<string, SettingFieldDef[]>);
+
+    const groupNames = Object.keys(groupedFields);
+    const [activeGroup, setActiveGroup] = useState(groupNames[0] || '');
+
+    // Update active group when fields load
+    useEffect(() => {
+        if (groupNames.length > 0 && !groupNames.includes(activeGroup)) {
+            setActiveGroup(groupNames[0]);
+        }
+    }, [groupNames.join(',')]);
+
+    if (isLoading) {
+        return (
+            <div className="space-y-4">
+                <div className="h-6 bg-white/5 rounded w-32 animate-pulse" />
+                <div className="h-10 bg-white/5 rounded animate-pulse" />
+                <div className="h-10 bg-white/5 rounded animate-pulse" />
+                <div className="h-10 bg-white/5 rounded animate-pulse" />
+            </div>
+        );
+    }
+
+    const activeFields = groupedFields[activeGroup] || [];
+
+    return (
+        <div className="space-y-6">
+            {/* Header */}
+            <div>
+                <h2 className="text-lg font-semibold">{title}</h2>
+                {description && <p className="text-sm text-muted">{description}</p>}
+            </div>
+
+            {/* Tab Navigation */}
+            {groupNames.length > 1 && (
+                <div className="flex flex-wrap gap-2 pb-4 border-b border-border-muted">
+                    {groupNames.map((groupName) => (
+                        <button
+                            key={groupName}
+                            onClick={() => setActiveGroup(groupName)}
+                            className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${activeGroup === groupName
+                                ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/25'
+                                : 'bg-white/5 text-muted hover:bg-white/10 hover:text-primary'
+                                }`}
+                        >
+                            {groupName}
+                            <span className={`ml-2 px-1.5 py-0.5 rounded-full text-xs ${activeGroup === groupName
+                                ? 'bg-white/20'
+                                : 'bg-white/10'
+                                }`}>
+                                {groupedFields[groupName].length}
+                            </span>
+                        </button>
+                    ))}
+                </div>
+            )}
+
+            {/* Active Tab Content */}
+            <div className="space-y-4">
+                {/* Special compact UI for Table Columns */}
+                {activeGroup.includes('Table Columns') || activeGroup.includes('Columns') ? (
+                    <div className="bg-dark rounded-xl border border-border-muted p-4">
+                        <div className="flex items-center gap-2 mb-4">
+                            <span className="text-sm font-medium">Select columns to display in the table:</span>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                            {activeFields.map((field) => (
+                                <label
+                                    key={field.key}
+                                    className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${settings[field.key]
+                                        ? 'bg-brand-primary/10 border-brand-primary/30'
+                                        : 'bg-white/5 border-border-muted hover:bg-white/10'
+                                        }`}
+                                >
+                                    <input
+                                        type="checkbox"
+                                        checked={settings[field.key] ?? field.defaultValue}
+                                        onChange={(e) => handleChange(field.key, e.target.checked)}
+                                        className="w-4 h-4 rounded border-gray-600 bg-dark text-brand-primary"
+                                    />
+                                    <span className={`text-sm font-medium ${settings[field.key] ? 'text-primary' : 'text-muted'}`}>
+                                        {field.label.replace('Show ', '').replace(' Column', '')}
+                                    </span>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+                ) : (
+                    /* Regular field rendering for other groups */
+                    <div className="grid gap-4 max-w-2xl">
+                        {activeFields.map((field) => (
+                            <SettingFieldRenderer
+                                key={field.key}
+                                field={field}
+                                value={settings[field.key]}
+                                onChange={(value) => handleChange(field.key, value)}
+                            />
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* Save Button */}
+            <div className="pt-4 border-t border-border-muted">
+                <button
+                    onClick={handleSave}
+                    disabled={isSaving}
+                    className="px-6 py-2.5 bg-brand-primary text-white rounded-lg font-semibold hover:bg-brand-primary/90 disabled:opacity-50 transition-all shadow-lg shadow-brand-primary/25"
+                >
+                    {isSaving ? 'Saving...' : 'Save Settings'}
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function SettingFieldRenderer({
+    field,
+    value,
+    onChange
+}: {
+    field: SettingFieldDef;
+    value: any;
+    onChange: (value: any) => void;
+}) {
+    switch (field.type) {
+        case 'boolean':
+            return (
+                <label className="flex items-center justify-between p-4 bg-dark rounded-lg border border-border-muted cursor-pointer">
+                    <div>
+                        <div className="font-medium">{field.label}</div>
+                        {field.description && <div className="text-xs text-muted">{field.description}</div>}
+                    </div>
+                    <input
+                        type="checkbox"
+                        checked={value ?? field.defaultValue}
+                        onChange={(e) => onChange(e.target.checked)}
+                        className="w-5 h-5 rounded border-gray-600 bg-dark text-brand-primary"
+                    />
+                </label>
+            );
+
+        case 'select':
+            return (
+                <div>
+                    <label className="block text-sm font-medium mb-1">{field.label}</label>
+                    <select
+                        value={value ?? field.defaultValue}
+                        onChange={(e) => onChange(e.target.value)}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    >
+                        {field.options?.map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                    </select>
+                    {field.description && <p className="text-xs text-muted mt-1">{field.description}</p>}
+                </div>
+            );
+
+        case 'number':
+            return (
+                <div>
+                    <label className="block text-sm font-medium mb-1">{field.label}</label>
+                    <input
+                        type="number"
+                        value={value ?? field.defaultValue}
+                        onChange={(e) => onChange(parseInt(e.target.value))}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    />
+                    {field.description && <p className="text-xs text-muted mt-1">{field.description}</p>}
+                </div>
+            );
+
+        case 'textarea':
+            return (
+                <div>
+                    <label className="block text-sm font-medium mb-1">{field.label}</label>
+                    <textarea
+                        value={value ?? field.defaultValue}
+                        onChange={(e) => onChange(e.target.value)}
+                        rows={4}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg resize-none"
+                    />
+                    {field.description && <p className="text-xs text-muted mt-1">{field.description}</p>}
+                </div>
+            );
+
+        case 'color':
+            return (
+                <div>
+                    <label className="block text-sm font-medium mb-1">{field.label}</label>
+                    <div className="flex gap-2">
+                        <input
+                            type="color"
+                            value={value ?? field.defaultValue}
+                            onChange={(e) => onChange(e.target.value)}
+                            className="w-10 h-10 rounded-lg border border-border-muted cursor-pointer"
+                        />
+                        <input
+                            type="text"
+                            value={value ?? field.defaultValue}
+                            onChange={(e) => onChange(e.target.value)}
+                            className="flex-1 px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                        />
+                    </div>
+                    {field.description && <p className="text-xs text-muted mt-1">{field.description}</p>}
+                </div>
+            );
+
+        default: // text
+            return (
+                <div>
+                    <label className="block text-sm font-medium mb-1">{field.label}</label>
+                    <input
+                        type="text"
+                        value={value ?? field.defaultValue}
+                        onChange={(e) => onChange(e.target.value)}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    />
+                    {field.description && <p className="text-xs text-muted mt-1">{field.description}</p>}
+                </div>
+            );
+    }
+}
+
+// Fallback fields for Users Admin UI when API not available
+function getUsersAdminUIFields(): SettingFieldDef[] {
+    return [
+        { key: 'users.ui.showStatsCards', label: 'Show Stats Cards', type: 'boolean', description: 'Display summary stats above the table', defaultValue: true, group: 'Users Admin UI' },
+        { key: 'users.ui.showSearch', label: 'Enable Search', type: 'boolean', description: 'Show search input for filtering users', defaultValue: true, group: 'Users Admin UI' },
+        { key: 'users.ui.showStatusFilter', label: 'Show Status Filter', type: 'boolean', description: 'Show dropdown to filter by user status', defaultValue: true, group: 'Users Admin UI' },
+        { key: 'users.ui.showRoleFilter', label: 'Show Role Filter', type: 'boolean', description: 'Show dropdown to filter by user role', defaultValue: true, group: 'Users Admin UI' },
+        { key: 'users.ui.showExport', label: 'Enable Export', type: 'boolean', description: 'Allow exporting user data', defaultValue: true, group: 'Users Admin UI' },
+        { key: 'users.ui.showImport', label: 'Enable Import', type: 'boolean', description: 'Allow bulk user import', defaultValue: true, group: 'Users Admin UI' },
+        { key: 'users.ui.showBulkActions', label: 'Enable Bulk Actions', type: 'boolean', description: 'Allow bulk role change, suspend, delete', defaultValue: true, group: 'Users Admin UI' },
+        { key: 'users.ui.allowInvite', label: 'Allow User Invites', type: 'boolean', description: 'Enable invite user workflow', defaultValue: true, group: 'Users Admin UI' },
+        { key: 'users.ui.showPagination', label: 'Show Pagination', type: 'boolean', description: 'Show pagination controls', defaultValue: true, group: 'Users Admin UI' },
+        { key: 'users.ui.columns.showId', label: 'ID', type: 'boolean', defaultValue: false, group: 'Users Table Columns' },
+        { key: 'users.ui.columns.showUsername', label: 'Username', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
+        { key: 'users.ui.columns.showEmail', label: 'Email', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
+        { key: 'users.ui.columns.showFullName', label: 'Full Name', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
+        { key: 'users.ui.columns.showRole', label: 'Role', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
+        { key: 'users.ui.columns.showStatus', label: 'Status', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
+        { key: 'users.ui.columns.showLastLogin', label: 'Last Login', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
+        { key: 'users.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
+        { key: 'users.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, group: 'Users Table Columns' },
+        { key: 'users.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, group: 'Users Table Columns' },
+    ];
+}
+
+// Fallback fields for Tenants when API not available
+function getTenantsAdminUIFields(): SettingFieldDef[] {
+    return [
+        // Admin UI
+        { key: 'tenants.ui.showStatsCards', label: 'Show Stats Cards', type: 'boolean', description: 'Display summary stats (Total, Active, Trial, Plans) above the table', defaultValue: true, group: 'Admin UI' },
+        { key: 'tenants.ui.showSearch', label: 'Enable Search', type: 'boolean', description: 'Show search input for filtering tenants', defaultValue: true, group: 'Admin UI' },
+        { key: 'tenants.ui.showStatusFilter', label: 'Show Status Filter', type: 'boolean', description: 'Show dropdown to filter by tenant status', defaultValue: true, group: 'Admin UI' },
+        { key: 'tenants.ui.showPlanFilter', label: 'Show Plan Filter', type: 'boolean', description: 'Show dropdown to filter by plan type', defaultValue: true, group: 'Admin UI' },
+        { key: 'tenants.ui.showExportCSV', label: 'Enable CSV Export', type: 'boolean', description: 'Allow exporting tenant data to CSV', defaultValue: true, group: 'Admin UI' },
+        { key: 'tenants.ui.showBulkImport', label: 'Enable Bulk Import', type: 'boolean', description: 'Allow bulk tenant creation via import', defaultValue: true, group: 'Admin UI' },
+        { key: 'tenants.ui.showQuickActions', label: 'Enable Quick Actions', type: 'boolean', description: 'Show quick actions dropdown (Edit, Clone, Suspend, etc.)', defaultValue: true, group: 'Admin UI' },
+        { key: 'tenants.ui.allowClone', label: 'Allow Tenant Cloning', type: 'boolean', description: 'Allow cloning tenants from the list view', defaultValue: true, group: 'Admin UI' },
+        { key: 'tenants.ui.allowStatusChange', label: 'Allow Status Changes', type: 'boolean', description: 'Allow changing tenant status (Suspend, Activate, Archive)', defaultValue: true, group: 'Admin UI' },
+        { key: 'tenants.ui.showPagination', label: 'Show Pagination', type: 'boolean', description: 'Show pagination controls with page size selector', defaultValue: true, group: 'Admin UI' },
+        { key: 'tenants.ui.defaultPageSize', label: 'Default Page Size', type: 'select', description: 'Number of tenants per page', defaultValue: '10', options: [{ label: '10', value: '10' }, { label: '25', value: '25' }, { label: '50', value: '50' }, { label: '100', value: '100' }], group: 'Admin UI' },
+
+        // Table Columns - ALL columns from tenants schema
+        // Basic Info
+        { key: 'tenants.ui.columns.showId', label: 'ID', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showName', label: 'Name', type: 'boolean', defaultValue: true, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showSlug', label: 'Slug', type: 'boolean', defaultValue: true, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showDomain', label: 'Domain', type: 'boolean', defaultValue: true, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showStatus', label: 'Status', type: 'boolean', defaultValue: true, group: 'Table Columns' },
+        // Lifecycle
+        { key: 'tenants.ui.columns.showTrialEndsAt', label: 'Trial Ends', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showSuspendedAt', label: 'Suspended At', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showSuspendedReason', label: 'Suspended Reason', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        // Ownership
+        { key: 'tenants.ui.columns.showOwnerId', label: 'Owner ID', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showOwnerEmail', label: 'Owner Email', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showBillingEmail', label: 'Billing Email', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        // Subscription
+        { key: 'tenants.ui.columns.showPlanId', label: 'Plan ID', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showPlanName', label: 'Plan', type: 'boolean', defaultValue: true, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showBillingStatus', label: 'Billing Status', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showNextBillingDate', label: 'Next Billing', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showMrr', label: 'MRR', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        // Resource Limits
+        { key: 'tenants.ui.columns.showMaxUsers', label: 'Max Users', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showMaxStorage', label: 'Max Storage', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showMaxApiCalls', label: 'Max API Calls', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        // Real-time Usage
+        { key: 'tenants.ui.columns.showCurrentUsers', label: 'Current Users', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showStorageUsed', label: 'Storage Used', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showApiCallsThisMonth', label: 'API Calls (Month)', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        // Metadata
+        { key: 'tenants.ui.columns.showIndustry', label: 'Industry', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showCompanySize', label: 'Company Size', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showNotes', label: 'Notes', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showTags', label: 'Tags', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        // Audit
+        { key: 'tenants.ui.columns.showLastActivityAt', label: 'Last Activity', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+
+        // Defaults
+        { key: 'tenants.defaultPlan', label: 'Default Plan', type: 'select', description: 'Plan assigned to new tenants', defaultValue: 'free', options: [{ label: 'Free', value: 'free' }, { label: 'Starter', value: 'starter' }, { label: 'Professional', value: 'professional' }, { label: 'Enterprise', value: 'enterprise' }], group: 'Defaults' },
+        { key: 'tenants.trialDays', label: 'Trial Period (Days)', type: 'number', description: 'Number of days for trial period', defaultValue: 14, group: 'Defaults' },
+        // Limits
+        { key: 'tenants.defaultMaxUsers', label: 'Default Max Users', type: 'number', description: 'Default user limit for new tenants', defaultValue: 5, group: 'Limits' },
+        { key: 'tenants.defaultMaxStorage', label: 'Default Max Storage (GB)', type: 'number', description: 'Default storage limit for new tenants', defaultValue: 1, group: 'Limits' },
+        { key: 'tenants.defaultMaxApiCalls', label: 'Default API Call Limit', type: 'number', description: 'Default monthly API call limit', defaultValue: 1000, group: 'Limits' },
+        // Domains
+        { key: 'tenants.allowCustomDomains', label: 'Allow Custom Domains', type: 'boolean', description: 'Tenants can use their own domains', defaultValue: true, group: 'Domains' },
+        { key: 'tenants.requireDomainVerification', label: 'Require Domain Verification', type: 'boolean', description: 'Custom domains must be verified via DNS', defaultValue: true, group: 'Domains' },
+        // Provisioning
+        { key: 'tenants.autoProvisionModules', label: 'Auto-Provision Modules', type: 'text', description: 'Comma-separated list of modules to enable for new tenants', defaultValue: 'cms,seo', group: 'Provisioning' },
+    ];
+}
+
+
+function SecuritySettings() {
+    const [maxAttempts, setMaxAttempts] = useState(5);
+    const [lockoutDuration, setLockoutDuration] = useState(15);
+    const [sessionTimeout, setSessionTimeout] = useState(30);
+
+    return (
+        <div className="space-y-6">
+            <h2 className="text-lg font-semibold">Security Settings</h2>
+            <div className="grid gap-4 max-w-md">
+                <div>
+                    <label className="block text-sm font-medium mb-1">Max Login Attempts</label>
+                    <input
+                        type="number"
+                        value={maxAttempts}
+                        onChange={(e) => setMaxAttempts(parseInt(e.target.value))}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium mb-1">Account Lockout Duration (minutes)</label>
+                    <input
+                        type="number"
+                        value={lockoutDuration}
+                        onChange={(e) => setLockoutDuration(parseInt(e.target.value))}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium mb-1">Session Timeout (days)</label>
+                    <input
+                        type="number"
+                        value={sessionTimeout}
+                        onChange={(e) => setSessionTimeout(parseInt(e.target.value))}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    />
+                </div>
+                <button className="px-4 py-2 bg-brand-primary text-white rounded-lg font-semibold w-fit">
+                    Save Changes
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function IntegrationsSettings() {
+    return (
+        <div className="space-y-6">
+            <h2 className="text-lg font-semibold">Integrations</h2>
+            <div className="grid gap-4">
+                {[
+                    { name: 'Cloudflare', status: 'Connected', color: 'green' },
+                    { name: 'Google Analytics', status: 'Not Connected', color: 'gray' },
+                    { name: 'Stripe', status: 'Not Connected', color: 'gray' },
+                ].map((integration) => (
+                    <div key={integration.name} className="flex items-center justify-between p-4 bg-dark rounded-lg border border-border-muted">
+                        <div>
+                            <div className="font-medium">{integration.name}</div>
+                            <div className={`text-xs ${integration.color === 'green' ? 'text-green-400' : 'text-muted'}`}>
+                                {integration.status}
+                            </div>
+                        </div>
+                        <button className="px-3 py-1.5 border border-border-muted rounded-lg text-sm hover:bg-white/5">
+                            {integration.status === 'Connected' ? 'Configure' : 'Connect'}
+                        </button>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function NotificationsSettings() {
+    const [emailNotifications, setEmailNotifications] = useState(true);
+    const [pushNotifications, setPushNotifications] = useState(false);
+
+    return (
+        <div className="space-y-6">
+            <h2 className="text-lg font-semibold">Notifications</h2>
+            <div className="space-y-4 max-w-md">
+                <label className="flex items-center justify-between p-4 bg-dark rounded-lg border border-border-muted cursor-pointer">
+                    <div>
+                        <div className="font-medium">Email Notifications</div>
+                        <div className="text-xs text-muted">Receive updates via email</div>
+                    </div>
+                    <input
+                        type="checkbox"
+                        checked={emailNotifications}
+                        onChange={(e) => setEmailNotifications(e.target.checked)}
+                        className="w-5 h-5 rounded border-gray-600 bg-dark text-brand-primary"
+                    />
+                </label>
+                <label className="flex items-center justify-between p-4 bg-dark rounded-lg border border-border-muted cursor-pointer">
+                    <div>
+                        <div className="font-medium">Push Notifications</div>
+                        <div className="text-xs text-muted">Receive browser notifications</div>
+                    </div>
+                    <input
+                        type="checkbox"
+                        checked={pushNotifications}
+                        onChange={(e) => setPushNotifications(e.target.checked)}
+                        className="w-5 h-5 rounded border-gray-600 bg-dark text-brand-primary"
+                    />
+                </label>
+            </div>
+        </div>
+    );
+}
+
+function ApiSettings() {
+    const [apiKey] = useState('rp_live_xxxxxxxxxxxxxxxxxxxx');
+
+    return (
+        <div className="space-y-6">
+            <h2 className="text-lg font-semibold">API Keys</h2>
+            <div className="space-y-4 max-w-lg">
+                <div>
+                    <label className="block text-sm font-medium mb-1">Live API Key</label>
+                    <div className="flex gap-2">
+                        <input
+                            type="text"
+                            value={apiKey}
+                            readOnly
+                            className="flex-1 px-3 py-2 bg-dark border border-border-muted rounded-lg font-mono text-sm"
+                        />
+                        <button className="px-3 py-2 border border-border-muted rounded-lg hover:bg-white/5">
+                            Copy
+                        </button>
+                    </div>
+                    <p className="text-xs text-muted mt-1">Use this key for production API calls.</p>
+                </div>
+                <button className="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg font-medium hover:bg-red-500/30">
+                    Regenerate Key
+                </button>
+            </div>
+        </div>
+    );
+}
+
+// Module-specific settings components
+function CMSSettings() {
+    const [defaultPostStatus, setDefaultPostStatus] = useState('draft');
+    const [postsPerPage, setPostsPerPage] = useState(10);
+
+    return (
+        <div className="space-y-6">
+            <div>
+                <h2 className="text-lg font-semibold">CMS Settings</h2>
+                <p className="text-sm text-muted">Configure content management options</p>
+            </div>
+            <div className="grid gap-4 max-w-md">
+                <div>
+                    <label className="block text-sm font-medium mb-1">Default Post Status</label>
+                    <select
+                        value={defaultPostStatus}
+                        onChange={(e) => setDefaultPostStatus(e.target.value)}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    >
+                        <option value="draft">Draft</option>
+                        <option value="published">Published</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-sm font-medium mb-1">Posts Per Page</label>
+                    <input
+                        type="number"
+                        value={postsPerPage}
+                        onChange={(e) => setPostsPerPage(parseInt(e.target.value))}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    />
+                </div>
+                <button className="px-4 py-2 bg-brand-primary text-white rounded-lg font-semibold w-fit">
+                    Save CMS Settings
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function CRMSettings() {
+    const [notifyOnSubmission, setNotifyOnSubmission] = useState(true);
+    const [defaultFromEmail, setDefaultFromEmail] = useState('');
+
+    return (
+        <div className="space-y-6">
+            <div>
+                <h2 className="text-lg font-semibold">CRM Settings</h2>
+                <p className="text-sm text-muted">Configure forms and email options</p>
+            </div>
+            <div className="grid gap-4 max-w-md">
+                <label className="flex items-center justify-between p-4 bg-dark rounded-lg border border-border-muted cursor-pointer">
+                    <div>
+                        <div className="font-medium">Notify on Form Submission</div>
+                        <div className="text-xs text-muted">Send email when forms are submitted</div>
+                    </div>
+                    <input
+                        type="checkbox"
+                        checked={notifyOnSubmission}
+                        onChange={(e) => setNotifyOnSubmission(e.target.checked)}
+                        className="w-5 h-5 rounded border-gray-600 bg-dark text-brand-primary"
+                    />
+                </label>
+                <div>
+                    <label className="block text-sm font-medium mb-1">Default From Email</label>
+                    <input
+                        type="email"
+                        value={defaultFromEmail}
+                        onChange={(e) => setDefaultFromEmail(e.target.value)}
+                        placeholder="noreply@example.com"
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    />
+                </div>
+                <button className="px-4 py-2 bg-brand-primary text-white rounded-lg font-semibold w-fit">
+                    Save CRM Settings
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function SEOSettings() {
+    const [sitemapEnabled, setSitemapEnabled] = useState(true);
+    const [robotsContent, setRobotsContent] = useState('User-agent: *\nAllow: /');
+
+    return (
+        <div className="space-y-6">
+            <div>
+                <h2 className="text-lg font-semibold">SEO Settings</h2>
+                <p className="text-sm text-muted">Configure search engine optimization</p>
+            </div>
+            <div className="grid gap-4 max-w-lg">
+                <label className="flex items-center justify-between p-4 bg-dark rounded-lg border border-border-muted cursor-pointer">
+                    <div>
+                        <div className="font-medium">Auto-generate Sitemap</div>
+                        <div className="text-xs text-muted">Automatically generate sitemap.xml</div>
+                    </div>
+                    <input
+                        type="checkbox"
+                        checked={sitemapEnabled}
+                        onChange={(e) => setSitemapEnabled(e.target.checked)}
+                        className="w-5 h-5 rounded border-gray-600 bg-dark text-brand-primary"
+                    />
+                </label>
+                <div>
+                    <label className="block text-sm font-medium mb-1">robots.txt Content</label>
+                    <textarea
+                        value={robotsContent}
+                        onChange={(e) => setRobotsContent(e.target.value)}
+                        rows={4}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg font-mono text-sm"
+                    />
+                </div>
+                <button className="px-4 py-2 bg-brand-primary text-white rounded-lg font-semibold w-fit">
+                    Save SEO Settings
+                </button>
+            </div>
+        </div>
+    );
+}
+
+// Core Module Settings Components
+function AuthSettings() {
+    const [sessionTimeout, setSessionTimeout] = useState(30);
+    const [maxLoginAttempts, setMaxLoginAttempts] = useState(5);
+    const [lockoutDuration, setLockoutDuration] = useState(15);
+    const [requireMFA, setRequireMFA] = useState(false);
+
+    return (
+        <div className="space-y-6">
+            <div>
+                <h2 className="text-lg font-semibold">Authentication Settings</h2>
+                <p className="text-sm text-muted">Configure login and security policies</p>
+            </div>
+            <div className="grid gap-4 max-w-md">
+                <div>
+                    <label className="block text-sm font-medium mb-1">Session Timeout (days)</label>
+                    <input
+                        type="number"
+                        value={sessionTimeout}
+                        onChange={(e) => setSessionTimeout(parseInt(e.target.value))}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium mb-1">Max Login Attempts</label>
+                    <input
+                        type="number"
+                        value={maxLoginAttempts}
+                        onChange={(e) => setMaxLoginAttempts(parseInt(e.target.value))}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium mb-1">Account Lockout Duration (minutes)</label>
+                    <input
+                        type="number"
+                        value={lockoutDuration}
+                        onChange={(e) => setLockoutDuration(parseInt(e.target.value))}
+                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
+                    />
+                </div>
+                <label className="flex items-center justify-between p-4 bg-dark rounded-lg border border-border-muted cursor-pointer">
+                    <div>
+                        <div className="font-medium">Require 2FA</div>
+                        <div className="text-xs text-muted">Require two-factor authentication</div>
+                    </div>
+                    <input
+                        type="checkbox"
+                        checked={requireMFA}
+                        onChange={(e) => setRequireMFA(e.target.checked)}
+                        className="w-5 h-5 rounded border-gray-600 bg-dark text-brand-primary"
+                    />
+                </label>
+                <button className="px-4 py-2 bg-brand-primary text-white rounded-lg font-semibold w-fit">
+                    Save Auth Settings
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function TenantsSettings() {
+    // This component renders all Tenants settings from the tenants module
+    // Settings are defined in packages/modules-tenants/src/settings/tenantsSettings.ts
+    return (
+        <DynamicModuleSettings
+            moduleId="tenants"
+            title="Tenants Settings"
+            description="Configure multi-tenancy and admin UI options"
+        // No filterGroups = show ALL groups (Admin UI, Table Columns, Defaults, Limits, Domains, Provisioning)
+        />
+    );
+}
+

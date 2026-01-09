@@ -15,6 +15,7 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
             });
             const data = await res.json();
             if (data.success) {
+                sessionStorage.setItem('rp_admin_token', data.token);
                 onLogin();
             } else {
                 setError(data.error);

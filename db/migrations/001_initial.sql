@@ -1,5 +1,5 @@
 -- tenants table: The master list of tenants
-CREATE TABLE tenants (
+CREATE TABLE IF NOT EXISTS tenants (
   id TEXT PRIMARY KEY NOT NULL,
   name TEXT NOT NULL,
   slug TEXT NOT NULL UNIQUE,
@@ -10,7 +10,7 @@ CREATE TABLE tenants (
 );
 
 -- tenant_domains table: Mapping domains to tenants
-CREATE TABLE tenant_domains (
+CREATE TABLE IF NOT EXISTS tenant_domains (
   id TEXT PRIMARY KEY NOT NULL,
   tenant_id TEXT NOT NULL,
   domain TEXT NOT NULL UNIQUE,
@@ -20,7 +20,7 @@ CREATE TABLE tenant_domains (
 );
 
 -- audit_logs table: Basic provisioning events
-CREATE TABLE audit_logs (
+CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY NOT NULL,
   tenant_id TEXT,
   event TEXT NOT NULL,
@@ -29,6 +29,6 @@ CREATE TABLE audit_logs (
 );
 
 -- Indexes for performance
-CREATE INDEX idx_tenants_slug ON tenants(slug);
-CREATE INDEX idx_domains_domain ON tenant_domains(domain);
-CREATE INDEX idx_domains_tenant ON tenant_domains(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tenants_slug ON tenants(slug);
+CREATE INDEX IF NOT EXISTS idx_domains_domain ON tenant_domains(domain);
+CREATE INDEX IF NOT EXISTS idx_domains_tenant ON tenant_domains(tenant_id);

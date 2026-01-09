@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import {
     Settings, Palette, Plug, Bell, Key, FileText, Contact,
-    Search as SearchIcon, Users, Shield, ChevronRight
+    Search as SearchIcon, Users, Shield, ChevronRight,
+    Info, User, Activity, CheckCircle2, Clock, AlertCircle
 } from 'lucide-react';
 import { useTenant } from '../../context/TenantContext';
 import { apiFetch } from '../../lib/api';
@@ -294,7 +295,7 @@ function UsersSettings() {
             moduleId="users"
             title="Users Settings"
             description="Configure user management options"
-            filterGroups={['Users Admin UI', 'Users Table Columns']}
+            filterGroups={['Seed Data', 'Users Admin UI', 'Users Table Columns']}
         />
     );
 }
@@ -307,11 +308,14 @@ function UsersSettings() {
 interface SettingFieldDef {
     key: string;
     label: string;
-    type: 'text' | 'number' | 'boolean' | 'select' | 'color' | 'textarea';
+    type: 'text' | 'number' | 'boolean' | 'select' | 'color' | 'textarea' | 'button' | 'action';
     description?: string;
     defaultValue: any;
     options?: Array<{ label: string; value: any }>;
     group?: string;
+    actionUrl?: string;
+    actionMethod?: string;
+    actionLabel?: string;
 }
 
 interface DynamicModuleSettingsProps {
@@ -327,6 +331,7 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const { activeTenant } = useTenant();
+    const [seedRefreshTrigger, setSeedRefreshTrigger] = useState(0);
 
     useEffect(() => {
         loadSettings();
@@ -419,6 +424,33 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
 
     const handleChange = (key: string, value: any) => {
         setSettings(prev => ({ ...prev, [key]: value }));
+    };
+
+    const handleAction = async (field: SettingFieldDef) => {
+        if (!field.actionUrl) return;
+
+        setIsSaving(true);
+        try {
+            const res = await apiFetch(field.actionUrl, {
+                method: field.actionMethod || 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tenantId: activeTenant?.id || 'default' })
+            });
+
+            if (res.ok) {
+                const result = await res.json();
+                showToast(result.message || result.error ? (result.error || 'Action failed') : 'Action completed successfully', result.error ? 'error' : 'success');
+                if (field.key === 'users.seedData.generate') {
+                    showToast(`Seeded ${result.seeded} users!`, 'success');
+                }
+            } else {
+                showToast('Action failed', 'error');
+            }
+        } catch (err) {
+            showToast('Failed to trigger action', 'error');
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const { showToast } = useToast();
@@ -556,10 +588,18 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
                                 field={field}
                                 value={settings[field.key]}
                                 onChange={(value) => handleChange(field.key, value)}
+                                onAction={async () => {
+                                    await handleAction(field);
+                                    // If seeding, trigger status refresh
+                                    if (field.key === 'users.seedData.generate') {
+                                        setSeedRefreshTrigger(prev => prev + 1);
+                                    }
+                                }}
                             />
                         ))}
                     </div>
                 )}
+                {activeGroup === 'Seed Data' && <SeedDataPreview refreshTrigger={seedRefreshTrigger} />}
             </div>
 
             {/* Save Button */}
@@ -579,13 +619,31 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
 function SettingFieldRenderer({
     field,
     value,
-    onChange
+    onChange,
+    onAction
 }: {
     field: SettingFieldDef;
     value: any;
     onChange: (value: any) => void;
+    onAction?: () => void;
 }) {
     switch (field.type) {
+        case 'button':
+        case 'action':
+            return (
+                <div className="flex items-center justify-between p-4 bg-dark rounded-lg border border-border-muted shadow-sm group hover:border-brand-primary/30 transition-colors">
+                    <div className="flex-1 pr-4">
+                        <div className="font-medium text-sm text-primary">{field.label}</div>
+                        {field.description && <div className="text-xs text-muted mt-1 leading-relaxed">{field.description}</div>}
+                    </div>
+                    <button
+                        onClick={(e) => { e.preventDefault(); onAction?.(); }}
+                        className="px-4 py-2 bg-white/5 border border-border-muted hover:bg-brand-primary hover:border-brand-primary text-primary hover:text-white rounded-lg text-xs font-bold transition-all whitespace-nowrap"
+                    >
+                        {field.actionLabel || 'Execute'}
+                    </button>
+                </div>
+            );
         case 'boolean':
             return (
                 <label className="flex items-center justify-between p-4 bg-dark rounded-lg border border-border-muted cursor-pointer">
@@ -707,6 +765,19 @@ function getUsersAdminUIFields(): SettingFieldDef[] {
         { key: 'users.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
         { key: 'users.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, group: 'Users Table Columns' },
         { key: 'users.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, group: 'Users Table Columns' },
+
+        // Seed Data Fallback
+        {
+            key: 'users.seedData.generate',
+            label: 'Generate Default Users',
+            type: 'button',
+            description: 'Automatically creates a standard set of users (Admin, Manager, Editor, Viewer, User) for every existing tenant.',
+            defaultValue: null,
+            group: 'Seed Data',
+            actionUrl: '/api/v1/users/seed',
+            actionMethod: 'POST',
+            actionLabel: 'Generate Now',
+        },
     ];
 }
 
@@ -1115,3 +1186,144 @@ function TenantsSettings() {
     );
 }
 
+function SeedDataPreview({ refreshTrigger }: { refreshTrigger?: number }) {
+    const [info, setInfo] = useState<any>(null);
+    const [status, setStatus] = useState<any>(null);
+    const [isLoading, setIsLoading] = useState(true);
+
+    const fetchData = async () => {
+        try {
+            const [infoRes, statusRes] = await Promise.all([
+                apiFetch('/api/v1/users/seed/info'),
+                apiFetch('/api/v1/users/seed/status')
+            ]);
+
+            if (infoRes.ok) setInfo(await infoRes.json());
+            if (statusRes.ok) setStatus(await statusRes.json());
+        } catch (error) {
+            console.error('Failed to fetch seed info:', error);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchData();
+        // Set up polling for status while on this tab
+        const interval = setInterval(fetchData, 5000);
+        return () => clearInterval(interval);
+    }, [refreshTrigger]); // Fetch when trigger changes
+
+    if (isLoading && !info) return (
+        <div className="mt-8 flex flex-col items-center justify-center p-12 bg-dark/30 rounded-2xl border border-dashed border-border-muted">
+            <Activity className="w-8 h-8 text-brand-primary animate-spin mb-4" />
+            <div className="text-sm text-muted">Analyzing platform seed state...</div>
+        </div>
+    );
+
+    return (
+        <div className="space-y-6 mt-8 pt-8 border-t border-border-muted/50 transition-all animate-in fade-in slide-in-from-top-4 duration-500">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Seed Details */}
+                <div className="bg-dark/40 backdrop-blur-sm rounded-2xl border border-border-muted p-6 space-y-6 shadow-xl">
+                    <div className="flex items-center justify-between">
+                        <h3 className="text-xs font-black flex items-center gap-2 text-primary uppercase tracking-[0.2em]">
+                            <Info className="w-4 h-4 text-brand-primary" />
+                            Account Blueprints
+                        </h3>
+                        <div className="text-[10px] text-muted-foreground bg-white/5 py-1 px-2 rounded uppercase font-bold">
+                            5 ROLES DEFINED
+                        </div>
+                    </div>
+
+                    <div className="grid gap-3">
+                        {info?.users?.map((u: any) => (
+                            <div key={u.role} className="flex flex-col p-4 bg-darker/60 rounded-xl border border-border-muted/30 group hover:border-brand-primary/40 hover:bg-darker/80 transition-all cursor-default">
+                                <div className="flex justify-between items-center mb-2">
+                                    <span className="text-[10px] font-black px-2 py-0.5 bg-brand-primary/10 text-brand-primary rounded uppercase tracking-wider">{u.role}</span>
+                                    <span className="text-[10px] text-muted font-mono opacity-60">{u.email}</span>
+                                </div>
+                                <div className="flex items-center gap-6">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-6 h-6 rounded-full bg-white/5 flex items-center justify-center">
+                                            <User className="w-3 h-3 text-muted" />
+                                        </div>
+                                        <span className="text-xs font-mono text-primary/90">{u.username}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-6 h-6 rounded-full bg-white/5 flex items-center justify-center">
+                                            <Key className="w-3 h-3 text-muted" />
+                                        </div>
+                                        <span className="text-xs font-mono text-primary/90">admin123</span>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="flex items-start gap-3 p-4 bg-brand-primary/5 rounded-xl border border-brand-primary/10">
+                        <AlertCircle className="w-5 h-5 text-brand-primary shrink-0" />
+                        <div>
+                            <p className="text-[11px] text-brand-primary/90 leading-relaxed font-medium">
+                                Account variables will be processed per tenant.
+                            </p>
+                            <p className="text-[10px] text-brand-primary/60 leading-relaxed italic mt-1">
+                                Example: For 'web4strategy', the admin will be 'web4strategy_admin'.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Seeding Status / Health Check */}
+                <div className="bg-dark/40 backdrop-blur-sm rounded-2xl border border-border-muted p-6 space-y-6 shadow-xl">
+                    <div className="flex justify-between items-center">
+                        <h3 className="text-xs font-black flex items-center gap-2 text-primary uppercase tracking-[0.2em]">
+                            <Activity className="w-4 h-4 text-brand-primary" />
+                            Tenant Health Check
+                        </h3>
+                        <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                            <span className="text-[10px] font-black tracking-widest text-muted uppercase">LIVE STATUS</span>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-darker/50 p-4 rounded-xl border border-border-muted/30">
+                            <div className="text-[10px] text-muted font-bold uppercase tracking-wider mb-1">Seeded Tenants</div>
+                            <div className="text-2xl font-black text-primary">{status?.completeTenants || 0}</div>
+                        </div>
+                        <div className="bg-darker/50 p-4 rounded-xl border border-border-muted/30">
+                            <div className="text-[10px] text-muted font-bold uppercase tracking-wider mb-1">Total Tenants</div>
+                            <div className="text-2xl font-black text-primary">{status?.totalTenants || 0}</div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-2 max-h-[340px] overflow-y-auto pr-3 custom-scrollbar custom-scrollbar-thin">
+                        {status?.details?.map((s: any) => (
+                            <div key={s.tenantId} className="flex items-center justify-between p-4 bg-darker/40 rounded-xl border border-border-muted/20 hover:bg-darker/70 transition-colors group">
+                                <div className="flex items-center gap-3">
+                                    <div className={`w-1.5 h-1.5 rounded-full ${s.isComplete ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.5)]'}`} />
+                                    <div className="flex flex-col">
+                                        <span className="text-[13px] font-bold tracking-tight">{s.slug}</span>
+                                        <span className="text-[10px] text-muted font-medium uppercase tracking-tighter">{s.count} accounts verified</span>
+                                    </div>
+                                </div>
+                                {s.isComplete ? (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 bg-green-500/10 text-green-400 rounded-lg">
+                                        <CheckCircle2 className="w-3.5 h-3.5" />
+                                        <span className="text-[10px] font-black uppercase tracking-tighter">Healthy</span>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 bg-orange-500/10 text-orange-400 rounded-lg group-hover:bg-orange-500/20 transition-all">
+                                        <Clock className="w-3.5 h-3.5 animate-spin-slow" />
+                                        <span className="text-[10px] font-black uppercase tracking-tighter">Needs Seeding</span>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}

@@ -350,6 +350,12 @@ export function UsersPage() {
     };
 
     const handleStatusChange = async (user: User, newStatus: User['status']) => {
+        // Safety guard: Don't allow suspending admins or super_admins
+        if (newStatus === 'suspended' && (user.role === 'admin' || user.role === 'super_admin')) {
+            showToast('Administrative accounts cannot be suspended', 'error');
+            return;
+        }
+
         try {
             const res = await apiFetch(`${PAGE_CONFIG.apiEndpoint}/${user.id}`, {
                 method: 'PATCH',
@@ -358,7 +364,14 @@ export function UsersPage() {
             });
             if (!res.ok) throw new Error('Update failed');
             showToast(`User ${newStatus === 'active' ? 'activated' : 'suspended'} successfully`, 'success');
-            fetchUsers();
+
+            // Optimistic update
+            setUsers(prev => prev.map(u => u.id === user.id ? { ...u, status: newStatus } : u));
+
+            // If the user is currently being viewed, update the displayed user
+            if (selectedUser?.id === user.id) {
+                setSelectedUser({ ...user, status: newStatus });
+            }
         } catch (err) {
             showToast('Failed to update status', 'error');
         }
@@ -715,34 +728,59 @@ function UserDetails({ user, roles, onEdit }: { user: User; roles: Role[]; onEdi
                 </div>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-3 pb-6">
                 <div className="flex justify-between py-2 border-b border-border-muted">
-                    <span className="text-muted">Last Login</span>
-                    <span>{getRelativeTime(user.last_login_at)}</span>
+                    <span className="text-muted text-sm">Username</span>
+                    <span className="text-sm font-mono">{user.username}</span>
                 </div>
                 <div className="flex justify-between py-2 border-b border-border-muted">
-                    <span className="text-muted">Created</span>
-                    <span>{new Date(user.created_at * 1000).toLocaleDateString()}</span>
+                    <span className="text-muted text-sm">Last Login</span>
+                    <span className="text-sm">{user.last_login_at ? new Date(user.last_login_at * 1000).toLocaleString() : 'Never'}</span>
                 </div>
+                <div className="flex justify-between py-2 border-b border-border-muted">
+                    <span className="text-muted text-sm">Created</span>
+                    <span className="text-sm">{new Date(user.created_at * 1000).toLocaleDateString()}</span>
+                </div>
+                {user.updated_at && (
+                    <div className="flex justify-between py-2 border-b border-border-muted">
+                        <span className="text-muted text-sm">Last Updated</span>
+                        <span className="text-sm">{new Date(user.updated_at * 1000).toLocaleDateString()}</span>
+                    </div>
+                )}
             </div>
 
             <div className="space-y-2">
-                <button onClick={onEdit} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-brand-primary text-white rounded-lg">
-                    <Edit className="w-4 h-4" /> Edit User
+                <button onClick={onEdit} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-brand-primary text-white rounded-lg hover:bg-brand-primary/90 transition-colors text-sm font-medium">
+                    <Edit2 className="w-4 h-4" /> Edit User
                 </button>
-                <button className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-border-muted rounded-lg hover:bg-white/5">
+                <button className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-border-muted rounded-lg hover:bg-white/5 transition-colors text-sm font-medium">
                     <Key className="w-4 h-4" /> Reset Password
-                </button>
-                <button className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-border-muted rounded-lg hover:bg-white/5">
-                    <History className="w-4 h-4" /> View Activity
                 </button>
             </div>
 
             <div className="pt-4 border-t border-red-500/30 space-y-2">
-                <div className="text-xs font-medium text-red-400 uppercase tracking-wider mb-2">Danger Zone</div>
-                <button className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-red-500/50 text-red-400 rounded-lg hover:bg-red-500/10">
-                    <UserX className="w-4 h-4" /> Suspend Account
-                </button>
+                <div className="text-[10px] font-bold text-red-400 uppercase tracking-widest mb-2 opacity-70">Danger Zone</div>
+                {user.status === 'active' ? (
+                    <button
+                        onClick={() => {
+                            if (user.role === 'admin' || user.role === 'super_admin') {
+                                showToast('Administrative accounts cannot be suspended', 'error');
+                            } else {
+                                handleStatusChange(user, 'suspended');
+                            }
+                        }}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-orange-500/50 text-orange-400 rounded-lg hover:bg-orange-500/10 transition-colors text-sm font-medium"
+                    >
+                        <XCircle className="w-4 h-4" /> Suspend Account
+                    </button>
+                ) : (
+                    <button
+                        onClick={() => handleStatusChange(user, 'active')}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-green-500/50 text-green-400 rounded-lg hover:bg-green-500/10 transition-colors text-sm font-medium"
+                    >
+                        <CheckCircle className="w-4 h-4" /> Activate Account
+                    </button>
+                )}
             </div>
         </div>
     );

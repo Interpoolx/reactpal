@@ -184,7 +184,7 @@ export interface SettingField {
     label: string;
 
     /** Field type */
-    type: 'text' | 'number' | 'boolean' | 'select' | 'color' | 'file' | 'json' | 'textarea';
+    type: 'text' | 'number' | 'boolean' | 'select' | 'color' | 'file' | 'json' | 'textarea' | 'button' | 'action';
 
     /** Help text */
     description?: string;
@@ -203,6 +203,15 @@ export interface SettingField {
 
     /** Group for organizing settings in UI (e.g., 'Admin UI', 'Table Columns', 'Defaults') */
     group?: string;
+
+    /** Action endpoint for button/action types */
+    actionUrl?: string;
+
+    /** HTTP method for the action (defaults to POST) */
+    actionMethod?: string;
+
+    /** Label for the action button */
+    actionLabel?: string;
 }
 
 /**

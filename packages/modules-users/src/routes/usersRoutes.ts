@@ -175,6 +175,122 @@ export function registerUsersRoutes(app: Hono<any>): void {
     });
 
     // ============================================================================
+    // SEED DATA ROUTES
+    // ============================================================================
+
+    /**
+     * GET /api/v1/users/seed/info
+     * Returns info about what users will be seeded
+     */
+    users.get('/seed/info', async (c) => {
+        return c.json({
+            users: [
+                { role: 'admin', username: '{tenant}_admin', password: 'admin123', email: 'admin@{tenant}' },
+                { role: 'manager', username: '{tenant}_manager', password: 'admin123', email: 'manager@{tenant}' },
+                { role: 'editor', username: '{tenant}_editor', password: 'admin123', email: 'editor@{tenant}' },
+                { role: 'viewer', username: '{tenant}_viewer', password: 'admin123', email: 'viewer@{tenant}' },
+                { role: 'user', username: '{tenant}_user', password: 'admin123', email: 'user@{tenant}' },
+            ]
+        });
+    });
+
+    /**
+     * GET /api/v1/users/seed/status
+     * Health check for seed data across all tenants
+     */
+    users.get('/seed/status', async (c) => {
+        const db = c.env.DB;
+        try {
+            const tenantsRes = await db.prepare('SELECT id, slug FROM tenants').all();
+            const tenants = tenantsRes.results || [];
+
+            const status: any[] = [];
+            for (const tenant of tenants as any[]) {
+                const seedUsers = await db.prepare(`
+                    SELECT COUNT(*) as count FROM users 
+                    WHERE tenant_id = ? AND username IN (?, ?, ?, ?, ?)
+                `).bind(
+                    tenant.id,
+                    `${tenant.slug}_admin`,
+                    `${tenant.slug}_manager`,
+                    `${tenant.slug}_editor`,
+                    `${tenant.slug}_viewer`,
+                    `${tenant.slug}_user`
+                ).first();
+
+                status.push({
+                    tenantId: tenant.id,
+                    slug: tenant.slug,
+                    count: (seedUsers as any)?.count || 0,
+                    isComplete: (seedUsers as any)?.count >= 5
+                });
+            }
+
+            return c.json({
+                totalTenants: tenants.length,
+                completeTenants: status.filter(s => s.isComplete).length,
+                details: status
+            });
+        } catch (error: any) {
+            return c.json({ error: 'Failed to check seed status' }, 500);
+        }
+    });
+
+    /**
+     * POST /api/v1/users/seed
+     * Seed default users across all tenants
+     */
+    users.post('/seed', async (c) => {
+        const db = c.env.DB;
+        try {
+            const tenantsRes = await db.prepare('SELECT id, slug FROM tenants').all();
+            const tenants = tenantsRes.results || [];
+
+            const defaultUsers = [
+                { role: 'admin', suffix: 'admin' },
+                { role: 'manager', suffix: 'manager' },
+                { role: 'editor', suffix: 'editor' },
+                { role: 'viewer', suffix: 'viewer' },
+                { role: 'user', suffix: 'user' },
+            ];
+
+            const now = Math.floor(Date.now() / 1000);
+            let count = 0;
+
+            for (const tenant of tenants as any[]) {
+                for (const def of defaultUsers) {
+                    const username = `${tenant.slug}_${def.suffix}`;
+                    const email = `${def.suffix}@${tenant.slug}`;
+                    const id = `u_${tenant.slug}_${def.suffix}`;
+
+                    const res = await db.prepare(`
+                        INSERT OR IGNORE INTO users (id, tenant_id, username, password, email, first_name, last_name, role, status, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).bind(
+                        id,
+                        tenant.id,
+                        username,
+                        'admin123',
+                        email,
+                        def.role.charAt(0).toUpperCase() + def.role.slice(1),
+                        'User',
+                        def.role,
+                        'active',
+                        now,
+                        now
+                    ).run();
+
+                    if (res.meta.changes > 0) count++;
+                }
+            }
+
+            return c.json({ success: true, seeded: count });
+        } catch (error: any) {
+            return c.json({ error: 'Failed to seed users', message: error.message }, 500);
+        }
+    });
+
+    // ============================================================================
     // ROLE ROUTES - /api/v1/roles
     // ============================================================================
 

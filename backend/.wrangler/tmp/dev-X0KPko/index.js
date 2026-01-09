@@ -9,14 +9,14 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// .wrangler/tmp/bundle-w0JdTD/strip-cf-connecting-ip-header.js
+// .wrangler/tmp/bundle-SqFVTZ/strip-cf-connecting-ip-header.js
 function stripCfConnectingIPHeader(input, init) {
   const request = new Request(input, init);
   request.headers.delete("CF-Connecting-IP");
   return request;
 }
 var init_strip_cf_connecting_ip_header = __esm({
-  ".wrangler/tmp/bundle-w0JdTD/strip-cf-connecting-ip-header.js"() {
+  ".wrangler/tmp/bundle-SqFVTZ/strip-cf-connecting-ip-header.js"() {
     "use strict";
     __name(stripCfConnectingIPHeader, "stripCfConnectingIPHeader");
     globalThis.fetch = new Proxy(globalThis.fetch, {
@@ -3346,6 +3346,95 @@ function registerUsersRoutes(app2) {
       return c.json({ error: "Failed to delete users", message: error.message }, 500);
     }
   });
+  users.get("/seed/info", async (c) => {
+    return c.json({
+      users: [
+        { role: "admin", username: "{tenant}_admin", password: "admin123", email: "admin@{tenant}" },
+        { role: "manager", username: "{tenant}_manager", password: "admin123", email: "manager@{tenant}" },
+        { role: "editor", username: "{tenant}_editor", password: "admin123", email: "editor@{tenant}" },
+        { role: "viewer", username: "{tenant}_viewer", password: "admin123", email: "viewer@{tenant}" },
+        { role: "user", username: "{tenant}_user", password: "admin123", email: "user@{tenant}" }
+      ]
+    });
+  });
+  users.get("/seed/status", async (c) => {
+    const db = c.env.DB;
+    try {
+      const tenantsRes = await db.prepare("SELECT id, slug FROM tenants").all();
+      const tenants = tenantsRes.results || [];
+      const status = [];
+      for (const tenant of tenants) {
+        const seedUsers = await db.prepare(`
+                    SELECT COUNT(*) as count FROM users 
+                    WHERE tenant_id = ? AND username IN (?, ?, ?, ?, ?)
+                `).bind(
+          tenant.id,
+          `${tenant.slug}_admin`,
+          `${tenant.slug}_manager`,
+          `${tenant.slug}_editor`,
+          `${tenant.slug}_viewer`,
+          `${tenant.slug}_user`
+        ).first();
+        status.push({
+          tenantId: tenant.id,
+          slug: tenant.slug,
+          count: seedUsers?.count || 0,
+          isComplete: seedUsers?.count >= 5
+        });
+      }
+      return c.json({
+        totalTenants: tenants.length,
+        completeTenants: status.filter((s) => s.isComplete).length,
+        details: status
+      });
+    } catch (error) {
+      return c.json({ error: "Failed to check seed status" }, 500);
+    }
+  });
+  users.post("/seed", async (c) => {
+    const db = c.env.DB;
+    try {
+      const tenantsRes = await db.prepare("SELECT id, slug FROM tenants").all();
+      const tenants = tenantsRes.results || [];
+      const defaultUsers = [
+        { role: "admin", suffix: "admin" },
+        { role: "manager", suffix: "manager" },
+        { role: "editor", suffix: "editor" },
+        { role: "viewer", suffix: "viewer" },
+        { role: "user", suffix: "user" }
+      ];
+      const now = Math.floor(Date.now() / 1e3);
+      let count = 0;
+      for (const tenant of tenants) {
+        for (const def of defaultUsers) {
+          const username = `${tenant.slug}_${def.suffix}`;
+          const email = `${def.suffix}@${tenant.slug}`;
+          const id = `u_${tenant.slug}_${def.suffix}`;
+          const res = await db.prepare(`
+                        INSERT OR IGNORE INTO users (id, tenant_id, username, password, email, first_name, last_name, role, status, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).bind(
+            id,
+            tenant.id,
+            username,
+            "admin123",
+            email,
+            def.role.charAt(0).toUpperCase() + def.role.slice(1),
+            "User",
+            def.role,
+            "active",
+            now,
+            now
+          ).run();
+          if (res.meta.changes > 0)
+            count++;
+        }
+      }
+      return c.json({ success: true, seeded: count });
+    } catch (error) {
+      return c.json({ error: "Failed to seed users", message: error.message }, 500);
+    }
+  });
   roles.get("/", async (c) => {
     const db = c.env.DB;
     const tenantId = c.req.query("tenantId");
@@ -3500,6 +3589,21 @@ var init_usersSettings = __esm({
       availableForTenants: true,
       requiredPermission: "settings.users.manage",
       fields: [
+        // ============================================================
+        // SEED DATA MANAGEMENT
+        // ============================================================
+        {
+          key: "users.seedData.generate",
+          label: "Generate Default Users",
+          type: "button",
+          description: "Automatically creates a standard set of users (Admin, Manager, Editor, Viewer, User) for every existing tenant. This is useful for initial setup or restoring standard access levels.",
+          defaultValue: null,
+          scope: "platform",
+          group: "Seed Data",
+          actionUrl: "/api/v1/users/seed",
+          actionMethod: "POST",
+          actionLabel: "Generate Now"
+        },
         // User Management
         {
           key: "users.defaultRole",
@@ -3685,22 +3789,7 @@ var init_usersSettings = __esm({
         { key: "users.ui.columns.showLastLogin", label: "Last Login", type: "boolean", defaultValue: true, scope: "tenant", group: "Users Table Columns" },
         { key: "users.ui.columns.showCreatedAt", label: "Created", type: "boolean", defaultValue: true, scope: "tenant", group: "Users Table Columns" },
         { key: "users.ui.columns.showUpdatedAt", label: "Updated", type: "boolean", defaultValue: false, scope: "tenant", group: "Users Table Columns" },
-        { key: "users.ui.columns.showCreatedBy", label: "Created By", type: "boolean", defaultValue: false, scope: "tenant", group: "Users Table Columns" },
-        // ============================================================
-        // SEED DATA MANAGEMENT
-        // ============================================================
-        {
-          key: "users.seedData.generate",
-          label: "Generate Default Users",
-          type: "button",
-          description: "Automatically creates a standard set of users (Admin, Manager, Editor, Viewer, User) for every existing tenant. This is useful for initial setup or restoring standard access levels.",
-          defaultValue: null,
-          scope: "platform",
-          group: "Seed Data",
-          actionUrl: "/api/v1/users/seed",
-          actionMethod: "POST",
-          actionLabel: "Generate Now"
-        }
+        { key: "users.ui.columns.showCreatedBy", label: "Created By", type: "boolean", defaultValue: false, scope: "tenant", group: "Users Table Columns" }
       ]
     };
   }
@@ -4644,11 +4733,11 @@ var init_src8 = __esm({
   }
 });
 
-// .wrangler/tmp/bundle-w0JdTD/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-SqFVTZ/middleware-loader.entry.ts
 init_strip_cf_connecting_ip_header();
 init_modules_watch_stub();
 
-// .wrangler/tmp/bundle-w0JdTD/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-SqFVTZ/middleware-insertion-facade.js
 init_strip_cf_connecting_ip_header();
 init_modules_watch_stub();
 
@@ -5274,7 +5363,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-w0JdTD/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-SqFVTZ/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -5308,7 +5397,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-w0JdTD/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-SqFVTZ/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

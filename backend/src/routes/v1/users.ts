@@ -11,12 +11,12 @@ users.get('/', async (c) => {
     const tenantId = c.req.query('tenantId');
 
     try {
-        let query = 'SELECT id, username, role, created_at FROM users';
+        let query = 'SELECT id, username, email, first_name, last_name, role, status, avatar_url, last_login_at, created_at, updated_at FROM users';
         const params: string[] = [];
 
-        if (tenantId && tenantId !== 'default') {
+        if (tenantId && tenantId !== 'all') { // Handle 'all' or defined tenant
             query += ' WHERE tenant_id = ?';
-            params.push(tenantId);
+            params.push(tenantId === 'default' ? 'default' : tenantId);
         }
 
         query += ' ORDER BY created_at DESC';
@@ -37,7 +37,7 @@ users.get('/:id', async (c) => {
     const id = c.req.param('id');
 
     try {
-        const user = await db.prepare('SELECT id, username, role, created_at FROM users WHERE id = ?').bind(id).first();
+        const user = await db.prepare('SELECT id, username, email, first_name, last_name, role, status, avatar_url, last_login_at, created_at, updated_at FROM users WHERE id = ?').bind(id).first();
         if (!user) {
             return c.json({ error: 'User not found' }, 404);
         }
@@ -54,7 +54,7 @@ users.get('/:id', async (c) => {
 users.post('/', async (c) => {
     const db = c.env.DB;
     const body = await c.req.json();
-    const { username, password, role = 'viewer', tenantId } = body;
+    const { username, password, email, first_name, last_name, role = 'viewer', status = 'active', tenantId } = body;
 
     if (!username || !password) {
         return c.json({ error: 'Username and password are required' }, 400);
@@ -65,11 +65,11 @@ users.post('/', async (c) => {
 
     try {
         await db.prepare(`
-            INSERT INTO users (id, username, password, role, tenant_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `).bind(id, username, password, role, tenantId || 'default', createdAt).run();
+            INSERT INTO users (id, username, password, email, first_name, last_name, role, status, tenant_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(id, username, password, email || null, first_name || null, last_name || null, role, status, tenantId || 'default', createdAt, createdAt).run();
 
-        return c.json({ id, username, role, created_at: createdAt }, 201);
+        return c.json({ id, username, email, first_name, last_name, role, status, created_at: createdAt }, 201);
     } catch (error: any) {
         if (error.message?.includes('UNIQUE constraint failed')) {
             return c.json({ error: 'Username already exists' }, 409);
@@ -86,27 +86,27 @@ users.patch('/:id', async (c) => {
     const db = c.env.DB;
     const id = c.req.param('id');
     const body = await c.req.json();
-    const { username, password, role } = body;
+    const { username, password, role, status, email, first_name, last_name, avatar_url } = body;
 
     const updates: string[] = [];
     const params: any[] = [];
 
-    if (username) {
-        updates.push('username = ?');
-        params.push(username);
-    }
-    if (password) {
-        updates.push('password = ?');
-        params.push(password);
-    }
-    if (role) {
-        updates.push('role = ?');
-        params.push(role);
-    }
+    if (username !== undefined) { updates.push('username = ?'); params.push(username); }
+    if (password !== undefined) { updates.push('password = ?'); params.push(password); }
+    if (role !== undefined) { updates.push('role = ?'); params.push(role); }
+    if (status !== undefined) { updates.push('status = ?'); params.push(status); }
+    if (email !== undefined) { updates.push('email = ?'); params.push(email); }
+    if (first_name !== undefined) { updates.push('first_name = ?'); params.push(first_name); }
+    if (last_name !== undefined) { updates.push('last_name = ?'); params.push(last_name); }
+    if (avatar_url !== undefined) { updates.push('avatar_url = ?'); params.push(avatar_url); }
 
     if (updates.length === 0) {
         return c.json({ error: 'No fields to update' }, 400);
     }
+
+    // Always update updated_at
+    updates.push('updated_at = ?');
+    params.push(Math.floor(Date.now() / 1000));
 
     params.push(id);
 
@@ -135,8 +135,62 @@ users.delete('/:id', async (c) => {
 });
 
 /**
+ * POST /api/v1/users/seed
+ * Seed default users across all tenants
+ */
+users.post('/seed', async (c) => {
+    const db = c.env.DB;
+    try {
+        // Fetch all tenants
+        const tenantsRes = await db.prepare('SELECT id, slug FROM tenants').all();
+        const tenants = tenantsRes.results;
+
+        const defaultUsers = [
+            { role: 'admin', suffix: 'admin' },
+            { role: 'manager', suffix: 'manager' },
+            { role: 'editor', suffix: 'editor' },
+            { role: 'viewer', suffix: 'viewer' },
+            { role: 'user', suffix: 'user' },
+        ];
+
+        const now = Math.floor(Date.now() / 1000);
+        let count = 0;
+
+        for (const tenant of tenants as any[]) {
+            for (const def of defaultUsers) {
+                const username = `${tenant.slug}_${def.suffix}`;
+                const email = `${def.suffix}@${tenant.slug}`;
+                const id = `u_${tenant.slug}_${def.suffix}`;
+
+                const res = await db.prepare(`
+                    INSERT OR IGNORE INTO users (id, tenant_id, username, password, email, first_name, last_name, role, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).bind(
+                    id,
+                    tenant.id,
+                    username,
+                    'admin123',
+                    email,
+                    def.role.charAt(0).toUpperCase() + def.role.slice(1),
+                    'User',
+                    def.role,
+                    'active',
+                    now,
+                    now
+                ).run();
+
+                if (res.meta.changes > 0) count++;
+            }
+        }
+
+        return c.json({ success: true, seeded: count });
+    } catch (error: any) {
+        return c.json({ error: 'Failed to seed users', message: error.message }, 500);
+    }
+});
+
+/**
  * POST /api/v1/users/bulk-delete
- * Bulk delete users
  */
 users.post('/bulk-delete', async (c) => {
     const db = c.env.DB;

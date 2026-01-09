@@ -13,6 +13,7 @@ settings.get('/sections/:moduleId', async (c) => {
     const tenantId = c.req.query('tenantId') || 'default';
 
     const section = settingsRegistry.get(moduleId);
+    console.log(`[Settings] Fetching section: ${moduleId} - Found: ${!!section} - Fields: ${section?.fields.length}`);
     if (!section) {
         return c.json({ error: 'Settings section not found' }, 404);
     }

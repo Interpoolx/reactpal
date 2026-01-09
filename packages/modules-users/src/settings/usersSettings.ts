@@ -13,6 +13,22 @@ export const usersSettingsSection: SettingSection = {
     requiredPermission: 'settings.users.manage',
 
     fields: [
+        // ============================================================
+        // SEED DATA MANAGEMENT
+        // ============================================================
+        {
+            key: 'users.seedData.generate',
+            label: 'Generate Default Users',
+            type: 'button',
+            description: 'Automatically creates a standard set of users (Admin, Manager, Editor, Viewer, User) for every existing tenant. This is useful for initial setup or restoring standard access levels.',
+            defaultValue: null,
+            scope: 'platform',
+            group: 'Seed Data',
+            actionUrl: '/api/v1/users/seed',
+            actionMethod: 'POST',
+            actionLabel: 'Generate Now',
+        },
+
         // User Management
         {
             key: 'users.defaultRole',
@@ -204,5 +220,6 @@ export const usersSettingsSection: SettingSection = {
         { key: 'users.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Users Table Columns' },
         { key: 'users.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, scope: 'tenant', group: 'Users Table Columns' },
         { key: 'users.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, scope: 'tenant', group: 'Users Table Columns' },
+
     ],
 };

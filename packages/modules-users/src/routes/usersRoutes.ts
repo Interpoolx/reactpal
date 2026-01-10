@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { moduleRegistry } from '@reactpress/core-registry';
 
 /**
  * Users module routes
@@ -13,21 +14,33 @@ export function registerUsersRoutes(app: Hono<any>): void {
     // USER ROUTES - /api/v1/users
     // ============================================================================
 
-    /**
-     * GET /api/v1/users
-     * List all users (optionally filtered by tenant)
-     */
     users.get('/', async (c) => {
         const db = c.env.DB;
         const tenantId = c.req.query('tenantId');
+        const status = c.req.query('status');
+        const search = c.req.query('search');
 
         try {
-            let query = `SELECT id, username, role, tenant_id, created_at FROM users`;
+            let query = `SELECT id, username, email, first_name, last_name, role, status, tenant_id, created_at FROM users WHERE 1=1`;
             const params: any[] = [];
 
             if (tenantId && tenantId !== 'default') {
-                query += ' WHERE tenant_id = ?';
+                query += ' AND tenant_id = ?';
                 params.push(tenantId);
+            }
+
+            if (status && status !== 'all') {
+                query += ' AND status = ?';
+                params.push(status);
+            } else {
+                // Default: Hide archived unless explicitly requested? 
+                // Actually, let's show all if status is 'all' but status filter in UI will handle it.
+            }
+
+            if (search) {
+                query += ' AND (username LIKE ? OR email LIKE ? OR first_name LIKE ? OR last_name LIKE ?)';
+                const searchTerm = `%${search}%`;
+                params.push(searchTerm, searchTerm, searchTerm, searchTerm);
             }
 
             query += ' ORDER BY created_at DESC';
@@ -128,6 +141,14 @@ export function registerUsersRoutes(app: Hono<any>): void {
         params.push(id);
 
         try {
+            // Safety guard: Don't allow suspending super_admins via API
+            if (status === 'suspended') {
+                const user = await db.prepare('SELECT role FROM users WHERE id = ?').bind(id).first();
+                if (user?.role === 'super_admin' || user?.role === 'super-admin') {
+                    return c.json({ error: 'Super Admin accounts cannot be suspended' }, 403);
+                }
+            }
+
             await db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).bind(...params).run();
             return c.json({ success: true });
         } catch (error: any) {
@@ -135,30 +156,35 @@ export function registerUsersRoutes(app: Hono<any>): void {
         }
     });
 
-    /**
-     * DELETE /api/v1/users/:id
-     * Soft delete a user
-     */
     users.delete('/:id', async (c) => {
         const db = c.env.DB;
         const id = c.req.param('id');
+        const permanent = c.req.query('permanent') === 'true';
 
         try {
-            await db.prepare('UPDATE users SET deleted_at = ?, status = ? WHERE id = ?')
-                .bind(Math.floor(Date.now() / 1000), 'inactive', id).run();
-            return c.json({ success: true });
+            // Safety guard: Don't allow deleting super_admins via API
+            const user = await db.prepare('SELECT role FROM users WHERE id = ?').bind(id).first();
+            if (user?.role === 'super_admin' || user?.role === 'super-admin') {
+                return c.json({ error: 'Super Admin accounts cannot be deleted' }, 403);
+            }
+
+            if (permanent) {
+                // Hard delete
+                await db.prepare('DELETE FROM users WHERE id = ?').bind(id).run();
+            } else {
+                // Soft delete (archive)
+                await db.prepare('UPDATE users SET deleted_at = ?, status = ?, updated_at = ? WHERE id = ?')
+                    .bind(Math.floor(Date.now() / 1000), 'archived', Math.floor(Date.now() / 1000), id).run();
+            }
+            return c.json({ success: true, permanent });
         } catch (error: any) {
             return c.json({ error: 'Failed to delete user', message: error.message }, 500);
         }
     });
 
-    /**
-     * POST /api/v1/users/bulk-delete
-     * Bulk soft delete users
-     */
     users.post('/bulk-delete', async (c) => {
         const db = c.env.DB;
-        const { ids } = await c.req.json();
+        const { ids, permanent = false } = await c.req.json();
 
         if (!Array.isArray(ids) || ids.length === 0) {
             return c.json({ error: 'IDs array is required' }, 400);
@@ -166,9 +192,14 @@ export function registerUsersRoutes(app: Hono<any>): void {
 
         try {
             const placeholders = ids.map(() => '?').join(', ');
-            await db.prepare(`UPDATE users SET deleted_at = ?, status = ? WHERE id IN (${placeholders})`)
-                .bind(Math.floor(Date.now() / 1000), 'inactive', ...ids).run();
-            return c.json({ success: true, deleted: ids.length });
+            if (permanent) {
+                await db.prepare(`DELETE FROM users WHERE id IN (${placeholders})`)
+                    .bind(...ids).run();
+            } else {
+                await db.prepare(`UPDATE users SET deleted_at = ?, status = ?, updated_at = ? WHERE id IN (${placeholders})`)
+                    .bind(Math.floor(Date.now() / 1000), 'archived', Math.floor(Date.now() / 1000), ...ids).run();
+            }
+            return c.json({ success: true, deleted: ids.length, permanent });
         } catch (error: any) {
             return c.json({ error: 'Failed to delete users', message: error.message }, 500);
         }
@@ -291,6 +322,26 @@ export function registerUsersRoutes(app: Hono<any>): void {
     });
 
     // ============================================================================
+    // PERMISSION ROUTES - /api/v1/permissions
+    // ============================================================================
+
+    const permissions = new Hono<{ Bindings: any; Variables: any }>();
+
+    /**
+     * GET /api/v1/permissions
+     * List all available permissions grouped by module
+     */
+    permissions.get('/', (c) => {
+        const modules = moduleRegistry.getAll();
+        const allPermissions = modules.map(m => ({
+            moduleId: m.id,
+            moduleName: m.name,
+            permissions: m.permissions || []
+        })).filter(m => m.permissions.length > 0);
+        return c.json(allPermissions);
+    });
+
+    // ============================================================================
     // ROLE ROUTES - /api/v1/roles
     // ============================================================================
 
@@ -328,13 +379,41 @@ export function registerUsersRoutes(app: Hono<any>): void {
     });
 
     /**
+     * GET /api/v1/roles/:id
+     * Get a single role with permissions
+     */
+    roles.get('/:id', async (c) => {
+        const db = c.env.DB;
+        const id = c.req.param('id');
+
+        try {
+            const role = await db.prepare('SELECT * FROM roles WHERE id = ?').bind(id).first();
+
+            if (!role) {
+                return c.json({ error: 'Role not found' }, 404);
+            }
+
+            // Fetch permissions
+            const permissionsRes = await db.prepare(`
+                SELECT permission_id FROM role_permissions WHERE role_id = ?
+            `).bind(id).all();
+
+            const permissions = (permissionsRes.results || []).map((p: any) => p.permission_id);
+
+            return c.json({ ...role, permissions });
+        } catch (error: any) {
+            return c.json({ error: 'Failed to fetch role', message: error.message }, 500);
+        }
+    });
+
+    /**
      * POST /api/v1/roles
      * Create a new role
      */
     roles.post('/', async (c) => {
         const db = c.env.DB;
         const body = await c.req.json();
-        const { name, slug, description, tenantId } = body;
+        const { name, slug, description, tenantId, permissions = [] } = body;
 
         if (!name || !slug) {
             return c.json({ error: 'Name and slug are required' }, 400);
@@ -348,12 +427,65 @@ export function registerUsersRoutes(app: Hono<any>): void {
         VALUES (?, ?, ?, ?, ?, 0, ?)
       `).bind(id, tenantId || 'default', name, slug, description, Math.floor(Date.now() / 1000)).run();
 
-            return c.json({ id, name, slug, description }, 201);
+            // Insert permissions
+            if (Array.isArray(permissions) && permissions.length > 0) {
+                const stmt = db.prepare('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)');
+                const batch = permissions.map((permId: string) => stmt.bind(id, permId));
+                await db.batch(batch);
+            }
+
+            return c.json({ id, name, slug, description, permissions }, 201);
         } catch (error: any) {
             if (error.message?.includes('UNIQUE constraint failed')) {
                 return c.json({ error: 'Role slug already exists for this tenant' }, 409);
             }
             return c.json({ error: 'Failed to create role', message: error.message }, 500);
+        }
+    });
+
+    /**
+     * PATCH /api/v1/roles/:id
+     * Update a role
+     */
+    roles.patch('/:id', async (c) => {
+        const db = c.env.DB;
+        const id = c.req.param('id');
+        const body = await c.req.json();
+        const { name, description, permissions } = body;
+
+        try {
+            const role = await db.prepare('SELECT is_system FROM roles WHERE id = ?').bind(id).first();
+            if (!role) return c.json({ error: 'Role not found' }, 404);
+
+            if (role.is_system && (name || description)) {
+                // Allow updating permissions for system roles? Maybe not name/slug.
+                // let's allow description update but not name for system roles
+            }
+
+            const updates: string[] = [];
+            const params: any[] = [];
+
+            if (name) { updates.push('name = ?'); params.push(name); }
+            if (description !== undefined) { updates.push('description = ?'); params.push(description); }
+
+            if (updates.length > 0) {
+                await db.prepare(`UPDATE roles SET ${updates.join(', ')} WHERE id = ?`).bind(...params, id).run();
+            }
+
+            // Update permissions if provided
+            if (permissions !== undefined && Array.isArray(permissions)) {
+                // Transaction-like: delete all, then insert new
+                // D1 doesn't support full transactions in HTTP API easily, but batch is atomic
+                const deleteStmt = db.prepare('DELETE FROM role_permissions WHERE role_id = ?').bind(id);
+                const insertStmt = db.prepare('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)');
+
+                const batch = [deleteStmt, ...permissions.map((permId: string) => insertStmt.bind(id, permId))];
+                await db.batch(batch);
+            }
+
+            return c.json({ success: true });
+        } catch (error: any) {
+            return c.json({ error: 'Failed to update role', message: error.message }, 500);
         }
     });
 
@@ -375,6 +507,10 @@ export function registerUsersRoutes(app: Hono<any>): void {
             if (role.is_system) {
                 return c.json({ error: 'Cannot delete system role' }, 403);
             }
+
+            // Delete associations first
+            await db.prepare('DELETE FROM role_permissions WHERE role_id = ?').bind(id).run();
+            // TODO: Handle users assigned to this role? separate check needed?
 
             await db.prepare('DELETE FROM roles WHERE id = ?').bind(id).run();
             return c.json({ success: true });
@@ -437,6 +573,25 @@ export function registerUsersRoutes(app: Hono<any>): void {
         const expiresAt = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60); // 7 days
 
         try {
+            // Check Limits
+            const tenant = await db.prepare('SELECT max_users FROM tenants WHERE id = ?').bind(tenantId).first();
+            if (tenant) {
+                const maxUsers = (tenant as any).max_users || 0;
+                if (maxUsers > 0) {
+                    // Count active users
+                    const usersCount = await db.prepare('SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND status != ?').bind(tenantId, 'archived').first();
+                    const activeUsers = (usersCount as any).count || 0;
+
+                    // Count pending invitations
+                    const invitesCount = await db.prepare('SELECT COUNT(*) as count FROM invitations WHERE tenant_id = ? AND status = ?').bind(tenantId, 'pending').first();
+                    const pendingInvites = (invitesCount as any).count || 0;
+
+                    if (activeUsers + pendingInvites >= maxUsers) {
+                        return c.json({ error: 'User limit reached. Please upgrade your plan.' }, 403);
+                    }
+                }
+            }
+
             await db.prepare(`
         INSERT INTO invitations (id, tenant_id, email, role_id, token, status, invited_by, expires_at, created_at)
         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
@@ -489,4 +644,5 @@ export function registerUsersRoutes(app: Hono<any>): void {
     app.route('/api/v1/users', users);
     app.route('/api/v1/roles', roles);
     app.route('/api/v1/invitations', invitations);
+    app.route('/api/v1/permissions', permissions);
 }

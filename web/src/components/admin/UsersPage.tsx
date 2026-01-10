@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ColumnDef } from '@tanstack/react-table';
 import { DataTable } from './DataTable';
 import { RightDrawer } from './RightDrawer';
@@ -8,9 +8,10 @@ import {
     Users, UserPlus, Shield, Mail, Calendar,
     CheckCircle, Clock, XCircle, AlertTriangle,
     Search, Download, Upload, Eye, Edit2, Key, History, UserX, X,
-    Plus, Trash2, Building2, MoreVertical
+    Plus, Trash2, Building2, MoreVertical, SortAsc, SortDesc, ArrowUpAZ, ArrowDownZA
 } from 'lucide-react';
 import { useToast } from '../ui/Toast';
+import { ActionConfirmModal } from '../ui/ActionConfirmModal';
 
 // ============================================================================
 // TYPES
@@ -23,7 +24,7 @@ interface User {
     last_name: string;
     username?: string;
     role: string;
-    status: 'active' | 'pending' | 'suspended' | 'inactive';
+    status: 'active' | 'pending' | 'suspended' | 'inactive' | 'archived';
     last_login_at?: number;
     created_at: number;
     updated_at?: number;
@@ -47,7 +48,7 @@ const PAGE_CONFIG = {
     title: 'Users',
     getDescription: (tenantName: string) => `Manage users for ${tenantName}`,
     apiEndpoint: '/api/v1/users',
-    rolesEndpoint: '/api/v1/users/roles',
+    rolesEndpoint: '/api/v1/roles',
     addButtonLabel: 'Invite User',
     addButtonIcon: UserPlus,
     searchPlaceholder: 'Search by name or email...',
@@ -69,7 +70,7 @@ const FILTER_CONFIG = {
             { value: 'active', label: 'Active' },
             { value: 'pending', label: 'Pending' },
             { value: 'suspended', label: 'Suspended' },
-            { value: 'inactive', label: 'Inactive' },
+            { value: 'archived', label: 'Archived' },
         ],
     },
 };
@@ -93,7 +94,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; Icon: any }>
     active: { label: 'Active', color: 'bg-green-500/20 text-green-400', Icon: CheckCircle },
     pending: { label: 'Pending', color: 'bg-blue-500/20 text-blue-400', Icon: Clock },
     suspended: { label: 'Suspended', color: 'bg-red-500/20 text-red-400', Icon: XCircle },
-    inactive: { label: 'Inactive', color: 'bg-gray-500/20 text-gray-400', Icon: AlertTriangle },
+    archived: { label: 'Archived', color: 'bg-gray-500/20 text-gray-400', Icon: AlertTriangle },
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -160,7 +161,7 @@ function UserQuickActions({
     onView: () => void;
     onEdit: () => void;
     onDelete: () => void;
-    onStatusChange: (status: User['status']) => void;
+    onStatusChange: (user: User, status: User['status']) => void;
 }) {
     const [isOpen, setIsOpen] = useState(false);
     const menuRef = useRef<HTMLDivElement>(null);
@@ -180,11 +181,24 @@ function UserQuickActions({
         { label: 'Edit User', icon: Edit2, onClick: onEdit, color: 'text-brand-primary' },
         { type: 'divider' },
         ...(user.status === 'active'
-            ? [{ label: 'Suspend', icon: XCircle, onClick: () => onStatusChange('suspended'), color: 'text-orange-400' }]
-            : [{ label: 'Activate', icon: CheckCircle, onClick: () => onStatusChange('active'), color: 'text-green-400' }]
+            ? [{ label: 'Suspend', icon: XCircle, onClick: () => onStatusChange(user, 'suspended'), color: 'text-orange-400' }]
+            : user.status !== 'archived'
+                ? [{ label: 'Activate', icon: CheckCircle, onClick: () => onStatusChange(user, 'active'), color: 'text-green-400' }]
+                : []
         ),
-        { type: 'divider' },
-        { label: 'Delete User', icon: Trash2, onClick: onDelete, color: 'text-red-400' },
+        // Archive option for non-archived users
+        ...(user.status !== 'archived'
+            ? [{ label: 'Archive User', icon: Trash2, onClick: () => onStatusChange(user, 'archived'), color: 'text-gray-400' }]
+            : []
+        ),
+        // Delete Permanently only for archived users
+        ...(user.status === 'archived'
+            ? [
+                { type: 'divider' },
+                { label: 'Delete Permanently', icon: Trash2, onClick: onDelete, color: 'text-red-400' }
+            ]
+            : []
+        ),
     ];
 
     return (
@@ -239,71 +253,55 @@ export function UsersPage() {
     const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({});
     const [uiSettings, setUiSettings] = useState<Record<string, any>>({});
+    const [filters, setFilters] = useState<Record<string, any>>({});
+    const [sorting, setSorting] = useState<Record<string, 'asc' | 'desc' | null>>({});
+    const [isSaving, setIsSaving] = useState(false);
     const { activeTenant } = useTenant();
     const { showToast } = useToast();
 
-    // Load UI settings
-    useEffect(() => {
-        const loadSettings = async () => {
-            try {
-                const res = await apiFetch(`/api/v1/settings/sections/users`);
-                let settings: Record<string, any> = {};
-
-                if (res.ok) {
-                    const data = await res.json();
-                    settings = data.values || {};
-                } else {
-                    const storageKey = `settings_users_${activeTenant?.id || 'default'}`;
-                    const saved = localStorage.getItem(storageKey);
-                    if (saved) settings = JSON.parse(saved);
-                }
-
-                if (Object.keys(settings).length > 0) {
-                    setUiSettings(settings);
-
-                    // Set visible columns
-                    const colSettings: Record<string, boolean> = {};
-                    Object.keys(settings).forEach(key => {
-                        if (key.startsWith('users.ui.columns.show')) {
-                            colSettings[key] = settings[key];
-                        }
-                    });
-                    setVisibleColumns(colSettings);
-
-                    // Set default page size if available
-                    if (settings['users.ui.defaultPageSize']) {
-                        setPageSize(parseInt(settings['users.ui.defaultPageSize']));
-                    }
-                }
-            } catch (err) {
-                console.error('Failed to load settings', err);
-            }
-        };
-        loadSettings();
-    }, [activeTenant?.id]);
+    // Action Confirmation Modal State
+    const [confirmModal, setConfirmModal] = useState<{
+        isOpen: boolean;
+        title: string;
+        description: string;
+        onConfirm: () => void;
+        variant: 'danger' | 'warning' | 'info';
+        confirmText?: string;
+    }>({
+        isOpen: false,
+        title: '',
+        description: '',
+        onConfirm: () => { },
+        variant: 'danger'
+    });
 
     // Data fetching
-    const fetchUsers = async () => {
+    const fetchUsers = useCallback(async () => {
         setIsLoading(true);
         try {
-            const tenantId = activeTenant?.id || 'default';
-            const res = await apiFetch(`${PAGE_CONFIG.apiEndpoint}?tenantId=${tenantId}`);
-            if (res.ok) {
-                const data = await res.json();
-                setUsers(data.map((u: any) => ({
-                    ...u,
-                    email: u.email || `${u.username}@example.com`,
-                    first_name: u.first_name || u.username || 'User',
-                    last_name: u.last_name || '',
-                    status: u.status || 'active',
-                })));
-            }
+            const params = new URLSearchParams();
+            if (activeTenant?.id) params.set('tenantId', activeTenant.id);
+            if (statusFilter && statusFilter !== 'all') params.set('status', statusFilter);
+            if (debouncedSearch) params.set('search', debouncedSearch);
+
+            const url = `${PAGE_CONFIG.apiEndpoint}?${params.toString()}`;
+            const res = await apiFetch(url);
+            if (!res.ok) throw new Error('Failed to fetch users');
+            const data = await res.json();
+            setUsers(data.map((u: any) => ({
+                ...u,
+                email: u.email || `${u.username}@example.com`,
+                first_name: u.first_name || u.username || 'User',
+                last_name: u.last_name || '',
+                status: u.status || 'active',
+            })));
         } catch (err) {
             console.error('Failed to fetch users', err);
+            showToast('Failed to fetch users', 'error');
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [activeTenant?.id, statusFilter, debouncedSearch, showToast]);
 
     const fetchRoles = async () => {
         try {
@@ -318,6 +316,43 @@ export function UsersPage() {
         }
     };
 
+    // Load UI settings from database
+    useEffect(() => {
+        const loadSettings = async () => {
+            try {
+                let settings: Record<string, any> = {};
+
+                // Load from database via API
+                const res = await apiFetch(`/api/v1/settings/sections/users?tenantId=${activeTenant?.id || 'default'}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.values) {
+                        settings = data.values;
+                    }
+                }
+
+                setUiSettings(settings);
+
+                // Set visible columns
+                const colSettings: Record<string, boolean> = {};
+                Object.keys(settings).forEach(key => {
+                    if (key.startsWith('users.ui.columns.show')) {
+                        colSettings[key] = settings[key];
+                    }
+                });
+                setVisibleColumns(colSettings);
+
+                // Set default page size if available
+                if (settings['users.ui.defaultPageSize']) {
+                    setPageSize(parseInt(settings['users.ui.defaultPageSize']));
+                }
+            } catch (err) {
+                console.error('Failed to load settings', err);
+            }
+        };
+        loadSettings();
+    }, [activeTenant?.id]);
+
     // Debounce search
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -330,52 +365,95 @@ export function UsersPage() {
     useEffect(() => {
         fetchUsers();
         fetchRoles();
-    }, [activeTenant]);
+    }, [activeTenant, fetchUsers]);
 
     // Handlers
     const handleInvite = () => { setSelectedUser(null); setDrawerMode('invite'); setDrawerOpen(true); };
     const handleEdit = (user: User) => { setSelectedUser(user); setDrawerMode('edit'); setDrawerOpen(true); };
     const handleView = (user: User) => { setSelectedUser(user); setDrawerMode('view'); setDrawerOpen(true); };
-    const handleDelete = async (rows: User[]) => {
-        if (!confirm(`Permanently delete ${rows.length} user(s)? This cannot be undone.`)) return;
-        try {
-            for (const user of rows) {
-                await apiFetch(`${PAGE_CONFIG.apiEndpoint}/${user.id}`, { method: 'DELETE' });
+    const handleDelete = async (rows: User[], permanent = false) => {
+        setConfirmModal({
+            isOpen: true,
+            title: permanent ? 'Permanently Delete' : 'Archive User',
+            description: permanent
+                ? `Are you sure you want to permanently delete ${rows.length} user(s)? This action cannot be undone.`
+                : `Are you sure you want to archive ${rows.length} user(s)? They will be moved to the Archived status.`,
+            confirmText: permanent ? 'Delete Permanently' : 'Archive',
+            variant: 'danger',
+            onConfirm: async () => {
+                try {
+                    setIsSaving(true);
+                    if (rows.length > 1) {
+                        const res = await apiFetch(`${PAGE_CONFIG.apiEndpoint}/bulk-delete`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ids: rows.map(r => r.id), permanent }),
+                        });
+                        if (!res.ok) throw new Error('Bulk delete failed');
+                    } else {
+                        const res = await apiFetch(`${PAGE_CONFIG.apiEndpoint}/${rows[0].id}${permanent ? '?permanent=true' : ''}`, {
+                            method: 'DELETE',
+                        });
+                        if (!res.ok) throw new Error('Delete failed');
+                    }
+                    showToast(`${permanent ? 'Permanently deleted' : 'Archived'} ${rows.length} user(s)`, 'success');
+                    setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                    fetchUsers();
+                } catch (err: any) {
+                    showToast(err.message || 'Action failed', 'error');
+                } finally {
+                    setIsSaving(false);
+                }
             }
-            showToast('Users deleted successfully', 'success');
-            fetchUsers();
-        } catch (err) {
-            showToast('Failed to delete users', 'error');
-        }
+        });
     };
 
     const handleStatusChange = async (user: User, newStatus: User['status']) => {
-        // Safety guard: Don't allow suspending admins or super_admins
-        if (newStatus === 'suspended' && (user.role === 'admin' || user.role === 'super_admin')) {
-            showToast('Administrative accounts cannot be suspended', 'error');
-            return;
-        }
-
-        try {
-            const res = await apiFetch(`${PAGE_CONFIG.apiEndpoint}/${user.id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ status: newStatus })
-            });
-            if (!res.ok) throw new Error('Update failed');
-            showToast(`User ${newStatus === 'active' ? 'activated' : 'suspended'} successfully`, 'success');
-
-            // Optimistic update
-            setUsers(prev => prev.map(u => u.id === user.id ? { ...u, status: newStatus } : u));
-
-            // If the user is currently being viewed, update the displayed user
-            if (selectedUser?.id === user.id) {
-                setSelectedUser({ ...user, status: newStatus });
+        const executeUpdate = async () => {
+            try {
+                const res = await apiFetch(`${PAGE_CONFIG.apiEndpoint}/${user.id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus }),
+                });
+                if (!res.ok) throw new Error('Status update failed');
+                showToast(`User ${newStatus} successfully`, 'success');
+                setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                fetchUsers();
+            } catch (err: any) {
+                showToast(err.message || 'Update failed', 'error');
             }
-        } catch (err) {
-            showToast('Failed to update status', 'error');
+        };
+
+        if (newStatus === 'suspended') {
+            // Safety guard: Don't allow suspending admins or super_admins
+            // Support both super_admin and super-admin for robustness
+            const isAdminRole = user.role === 'admin' || user.role === 'super_admin' || user.role === 'super-admin';
+            if (isAdminRole) {
+                showToast('Administrative accounts cannot be suspended', 'error');
+                return;
+            }
+            setConfirmModal({
+                isOpen: true,
+                title: 'Suspend User',
+                description: `Are you sure you want to suspend "${user.first_name} ${user.last_name}"? They will lose access to the platform.`,
+                confirmText: 'Suspend',
+                variant: 'warning',
+                onConfirm: executeUpdate
+            });
+        } else if (newStatus === 'archived') {
+            handleDelete([user], false);
+        } else {
+            executeUpdate();
         }
     };
+
+    const handleEmptyArchive = () => {
+        const archivedUsers = users.filter(u => u.status === 'archived');
+        if (archivedUsers.length === 0) return;
+        handleDelete(archivedUsers, true);
+    };
+
     const handleSave = async (formData: any) => {
         console.log('Saving:', formData);
         setDrawerOpen(false);
@@ -383,14 +461,52 @@ export function UsersPage() {
     };
 
     // Filter users (with debounced search)
-    const filteredUsers = users.filter(user => {
+    let filteredUsers = users.filter(user => {
         const matchesSearch = !debouncedSearch ||
             user.email?.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
             user.first_name?.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
             user.last_name?.toLowerCase().includes(debouncedSearch.toLowerCase());
         const matchesStatus = statusFilter === 'all' || user.status === statusFilter;
         const matchesRole = roleFilter === 'all' || user.role === roleFilter;
-        return matchesSearch && matchesStatus && matchesRole;
+
+        // Dynamic filters
+        const matchesDynamic = Object.entries(filters).every(([key, value]) => {
+            if (!value || value === 'all') return true;
+            const cellValue = (user as any)[key];
+
+            // Handle range filters
+            if (typeof value === 'object' && (value.min !== undefined || value.max !== undefined)) {
+                const val = Number(cellValue || 0);
+                if (value.min && val < Number(value.min)) return false;
+                if (value.max && val > Number(value.max)) return false;
+                return true;
+            }
+
+            if (typeof value === 'object' && (value.start !== undefined || value.end !== undefined)) {
+                const val = cellValue ? new Date(cellValue).getTime() : 0;
+                if (value.start && val < new Date(value.start).getTime()) return false;
+                if (value.end && val > new Date(value.end).getTime()) return false;
+                return true;
+            }
+
+            const strValue = String(cellValue || '').toLowerCase();
+            return strValue.includes(String(value).toLowerCase());
+        });
+
+        return matchesSearch && matchesStatus && matchesRole && matchesDynamic;
+    });
+
+    // Dynamic sorting
+    Object.entries(sorting).forEach(([key, direction]) => {
+        if (direction) {
+            filteredUsers.sort((a: any, b: any) => {
+                const valA = a[key];
+                const valB = b[key];
+                if (valA < valB) return direction === 'asc' ? -1 : 1;
+                if (valA > valB) return direction === 'asc' ? 1 : -1;
+                return 0;
+            });
+        }
     });
 
     // Pagination
@@ -405,13 +521,26 @@ export function UsersPage() {
         roles: roles.length,
     };
 
-    const hasActiveFilters = searchQuery || statusFilter !== 'all' || roleFilter !== 'all';
+    const handleFilterChange = (key: string, value: any) => {
+        setFilters(prev => ({ ...prev, [key]: value }));
+        setCurrentPage(1);
+    };
+
+    const handleSortChange = (key: string, direction: 'asc' | 'desc' | null) => {
+        setSorting(prev => ({ ...prev, [key]: direction }));
+    };
 
     const clearFilters = () => {
         setSearchQuery('');
         setStatusFilter('all');
         setRoleFilter('all');
+        setFilters({});
+        setSorting({});
     };
+
+    const hasActiveFilters = searchQuery || statusFilter !== 'all' || roleFilter !== 'all' ||
+        Object.values(filters).some(v => v !== '' && v !== 'all' && v !== null) ||
+        Object.values(sorting).some(v => v !== null);
 
     // All available columns
     const allColumns: (ColumnDef<User, any> & { showSetting?: string })[] = [
@@ -510,8 +639,8 @@ export function UsersPage() {
                     user={row.original}
                     onView={() => handleView(row.original)}
                     onEdit={() => handleEdit(row.original)}
-                    onDelete={() => handleDelete([row.original])}
-                    onStatusChange={(status) => handleStatusChange(row.original, status)}
+                    onDelete={() => handleDelete([row.original], row.original.status === 'archived')}
+                    onStatusChange={handleStatusChange}
                 />
             ),
             size: 50,
@@ -549,14 +678,41 @@ export function UsersPage() {
                             Import
                         </button>
                     )}
+                    <button
+                        onClick={() => window.location.href = '/hpanel/users/roles'}
+                        className="flex items-center gap-2 px-4 py-2 border border-border-muted rounded-xl text-sm font-medium hover:bg-white/5 transition-colors"
+                    >
+                        <Shield className="w-4 h-4" />
+                        Manage Roles
+                    </button>
                     {uiSettings['users.ui.allowInvite'] !== false && (
-                        <button
-                            onClick={handleInvite}
-                            className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-white rounded-xl text-sm font-semibold hover:bg-brand-primary/90 transition-colors"
-                        >
-                            <PAGE_CONFIG.addButtonIcon className="w-4 h-4" />
-                            {PAGE_CONFIG.addButtonLabel}
-                        </button>
+                        <div className="flex items-center gap-3">
+                            {(activeTenant?.max_users || 0) > 0 && (
+                                <div className="text-sm text-muted hidden md:block">
+                                    <span className={((activeTenant?.current_users || 0) >= (activeTenant?.max_users || 0)) ? 'text-red-400 font-bold' : ''}>
+                                        {activeTenant?.current_users || 0}
+                                    </span>
+                                    <span className="opacity-50"> / </span>
+                                    <span>{activeTenant?.max_users} users</span>
+                                </div>
+                            )}
+                            <button
+                                onClick={() => {
+                                    if ((activeTenant?.max_users || 0) > 0 && (activeTenant?.current_users || 0) >= (activeTenant?.max_users || 0)) {
+                                        showToast('User limit reached. Please upgrade your plan.', 'error');
+                                        return;
+                                    }
+                                    handleInvite();
+                                }}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${(activeTenant?.max_users || 0) > 0 && (activeTenant?.current_users || 0) >= (activeTenant?.max_users || 0)
+                                    ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                                    : 'bg-brand-primary text-white hover:bg-brand-primary/90'
+                                    }`}
+                            >
+                                <PAGE_CONFIG.addButtonIcon className="w-4 h-4" />
+                                {PAGE_CONFIG.addButtonLabel}
+                            </button>
+                        </div>
                     )}
                 </div>
             </div>
@@ -589,53 +745,183 @@ export function UsersPage() {
                 </div>
             )}
 
-            {/* Filters (Config-Driven) */}
-            <div className={`flex flex-wrap items-center gap-4 p-4 bg-darker rounded-xl border border-border-muted ${(uiSettings['users.ui.showSearch'] === false && uiSettings['users.ui.showStatusFilter'] === false && uiSettings['users.ui.showRoleFilter'] === false) ? 'hidden' : ''}`}>
-                {uiSettings['users.ui.showSearch'] !== false && (
-                    <div className="relative flex-1 min-w-[200px]">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
-                        <input
-                            type="text"
-                            placeholder={PAGE_CONFIG.searchPlaceholder}
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full pl-10 pr-4 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
-                        />
+            {/* Filters (Dynamic Config-Driven) */}
+            {(() => {
+                const filterConfig = uiSettings['users.ui.filterConfig'] || {};
+                const searchEnabled = uiSettings['users.ui.showSearch'] !== false;
+
+                const enabledFilters = Object.entries(filterConfig)
+                    .filter(([_, config]: [string, any]) => config.enabled)
+                    .map(([key, config]: [string, any]) => ({ key, ...config }));
+
+                if (!searchEnabled && enabledFilters.length === 0) return null;
+
+                return (
+                    <div className="flex flex-wrap items-center gap-4 p-4 bg-darker rounded-xl border border-border-muted">
+                        {searchEnabled && (
+                            <div className="relative flex-1 min-w-[200px]">
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
+                                <input
+                                    type="text"
+                                    placeholder={PAGE_CONFIG.searchPlaceholder}
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    className="w-full pl-10 pr-4 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
+                                />
+                            </div>
+                        )}
+
+                        {enabledFilters.map((cfg) => {
+                            if (cfg.key === 'status') {
+                                return (
+                                    <select
+                                        key="status"
+                                        value={statusFilter}
+                                        onChange={(e) => setStatusFilter(e.target.value)}
+                                        className="px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm min-w-[120px]"
+                                    >
+                                        <option value="all">All Status</option>
+                                        {Object.entries(STATUS_CONFIG).map(([key, config]) => (
+                                            <option key={key} value={key}>{config.label}</option>
+                                        ))}
+                                    </select>
+                                );
+                            }
+                            if (cfg.key === 'role') {
+                                return (
+                                    <select
+                                        key="role"
+                                        value={roleFilter}
+                                        onChange={(e) => setRoleFilter(e.target.value)}
+                                        className="px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm min-w-[120px]"
+                                    >
+                                        <option value="all">All Roles</option>
+                                        {roles.map(role => (
+                                            <option key={role.id} value={role.slug}>{role.name}</option>
+                                        ))}
+                                    </select>
+                                );
+                            }
+
+                            switch (cfg.type) {
+                                case 'select':
+                                case 'multi-select':
+                                    const options = cfg.options === 'auto'
+                                        ? [...new Set(users.map(u => (u as any)[cfg.key]))].filter(Boolean).map(v => ({ label: v, value: v }))
+                                        : (Array.isArray(cfg.options) ? cfg.options : []);
+
+                                    return (
+                                        <div key={cfg.key} className="flex flex-col gap-1">
+                                            <label className="text-[10px] font-bold text-muted uppercase tracking-wider pl-1">{cfg.label}</label>
+                                            <div className="flex items-center gap-2">
+                                                <select
+                                                    value={filters[cfg.key] || 'all'}
+                                                    onChange={(e) => handleFilterChange(cfg.key, e.target.value)}
+                                                    className="px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm min-w-[120px]"
+                                                >
+                                                    <option value="all">All {cfg.label}</option>
+                                                    {options.map((opt: any) => (
+                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                    ))}
+                                                </select>
+                                                {cfg.sortOptions && <SortButton column={cfg.key} currentSort={sorting[cfg.key]} onSort={handleSortChange} />}
+                                            </div>
+                                        </div>
+                                    );
+                                case 'text':
+                                    return (
+                                        <div key={cfg.key} className="flex flex-col gap-1">
+                                            <label className="text-[10px] font-bold text-muted uppercase tracking-wider pl-1">{cfg.label}</label>
+                                            <div className="flex items-center gap-2">
+                                                <div className="relative min-w-[150px]">
+                                                    <input
+                                                        type="text"
+                                                        placeholder={`Filter ${cfg.label}...`}
+                                                        value={filters[cfg.key] || ''}
+                                                        onChange={(e) => handleFilterChange(cfg.key, e.target.value)}
+                                                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
+                                                    />
+                                                </div>
+                                                {cfg.sortOptions && <SortButton column={cfg.key} currentSort={sorting[cfg.key]} onSort={handleSortChange} />}
+                                            </div>
+                                        </div>
+                                    );
+                                case 'number-range':
+                                    return (
+                                        <div key={cfg.key} className="flex flex-col gap-1">
+                                            <label className="text-[10px] font-bold text-muted uppercase tracking-wider pl-1">{cfg.label} Range</label>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex items-center bg-dark border border-border-muted rounded-lg overflow-hidden h-[38px]">
+                                                    <input
+                                                        type="number"
+                                                        placeholder="Min"
+                                                        value={filters[cfg.key]?.min || ''}
+                                                        onChange={(e) => handleFilterChange(cfg.key, { ...filters[cfg.key], min: e.target.value })}
+                                                        className="w-16 px-2 py-1 bg-transparent border-none text-xs focus:ring-0"
+                                                    />
+                                                    <div className="w-[1px] h-4 bg-border-muted" />
+                                                    <input
+                                                        type="number"
+                                                        placeholder="Max"
+                                                        value={filters[cfg.key]?.max || ''}
+                                                        onChange={(e) => handleFilterChange(cfg.key, { ...filters[cfg.key], max: e.target.value })}
+                                                        className="w-16 px-2 py-1 bg-transparent border-none text-xs focus:ring-0"
+                                                    />
+                                                </div>
+                                                {cfg.sortOptions && <SortButton column={cfg.key} currentSort={sorting[cfg.key]} onSort={handleSortChange} />}
+                                            </div>
+                                        </div>
+                                    );
+                                case 'date-range':
+                                    return (
+                                        <div key={cfg.key} className="flex flex-col gap-1">
+                                            <label className="text-[10px] font-bold text-muted uppercase tracking-wider pl-1">{cfg.label} Date</label>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex items-center bg-dark border border-border-muted rounded-lg overflow-hidden h-[38px]">
+                                                    <input
+                                                        type="date"
+                                                        value={filters[cfg.key]?.start || ''}
+                                                        onChange={(e) => handleFilterChange(cfg.key, { ...filters[cfg.key], start: e.target.value })}
+                                                        className="px-2 py-1 bg-transparent border-none text-[10px] focus:ring-0 w-28"
+                                                    />
+                                                    <div className="w-[1px] h-4 bg-border-muted" />
+                                                    <input
+                                                        type="date"
+                                                        value={filters[cfg.key]?.end || ''}
+                                                        onChange={(e) => handleFilterChange(cfg.key, { ...filters[cfg.key], end: e.target.value })}
+                                                        className="px-2 py-1 bg-transparent border-none text-[10px] focus:ring-0 w-28"
+                                                    />
+                                                </div>
+                                                {cfg.sortOptions && <SortButton column={cfg.key} currentSort={sorting[cfg.key]} onSort={handleSortChange} />}
+                                            </div>
+                                        </div>
+                                    );
+                                default: return null;
+                            }
+                        })}
+
+                        {statusFilter === 'archived' && filteredUsers.length > 0 && (
+                            <button
+                                onClick={handleEmptyArchive}
+                                className="ml-auto flex items-center gap-2 px-3 py-2 bg-red-500/10 text-red-500 border border-red-500/20 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors"
+                            >
+                                <Trash2 className="w-4 h-4" />
+                                Empty Archive
+                            </button>
+                        )}
+
+                        <div className={`overflow-hidden transition-all duration-300 flex items-center ${hasActiveFilters ? 'max-w-[100px] opacity-100 ml-2' : 'max-w-0 opacity-0 ml-0'}`}>
+                            <button
+                                onClick={clearFilters}
+                                className="flex items-center gap-2 px-3 py-2 text-muted hover:text-primary text-sm transition-colors whitespace-nowrap"
+                            >
+                                <X className="w-4 h-4" />
+                                Clear
+                            </button>
+                        </div>
                     </div>
-                )}
-
-                {uiSettings['users.ui.showStatusFilter'] !== false && (
-                    <select
-                        value={statusFilter}
-                        onChange={(e) => setStatusFilter(e.target.value)}
-                        className="px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
-                    >
-                        <option value="all">All Status</option>
-                        {Object.entries(STATUS_CONFIG).map(([key, config]) => (
-                            <option key={key} value={key}>{config.label}</option>
-                        ))}
-                    </select>
-                )}
-
-                {uiSettings['users.ui.showRoleFilter'] !== false && (
-                    <select
-                        value={roleFilter}
-                        onChange={(e) => setRoleFilter(e.target.value)}
-                        className="px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
-                    >
-                        <option value="all">All Roles</option>
-                        {roles.map(role => (
-                            <option key={role.id} value={role.slug}>{role.name}</option>
-                        ))}
-                    </select>
-                )}
-                {hasActiveFilters && (
-                    <button onClick={clearFilters} className="flex items-center gap-2 px-3 py-2 text-muted hover:text-primary text-sm">
-                        <X className="w-4 h-4" />
-                        Clear
-                    </button>
-                )}
-            </div>
+                );
+            })()}
 
             {/* Bulk Actions Bar */}
             {selectedUsers.length > 0 && (
@@ -692,18 +978,60 @@ export function UsersPage() {
                 title={drawerMode === 'invite' ? 'Invite User' : drawerMode === 'edit' ? 'Edit User' : 'User Details'}
             >
                 {drawerMode === 'view' && selectedUser ? (
-                    <UserDetails user={selectedUser} roles={roles} onEdit={() => setDrawerMode('edit')} />
+                    <UserDetails
+                        user={selectedUser}
+                        roles={roles}
+                        onEdit={() => setDrawerMode('edit')}
+                        onStatusChange={handleStatusChange}
+                        showToast={showToast}
+                    />
                 ) : (
                     <InviteUserForm
                         user={selectedUser}
                         roles={roles}
                         onSave={handleSave}
-                        onCancel={() => setDrawerOpen(false)}
+                        onClose={() => setDrawerOpen(false)}
                         isEdit={drawerMode === 'edit'}
                     />
                 )}
             </RightDrawer>
+
+            <ActionConfirmModal
+                isOpen={confirmModal.isOpen}
+                onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+                onConfirm={confirmModal.onConfirm}
+                title={confirmModal.title}
+                description={confirmModal.description}
+                confirmText={confirmModal.confirmText}
+                variant={confirmModal.variant}
+                isLoading={isSaving}
+            />
         </div>
+    );
+}
+
+function SortButton({ column, currentSort, onSort }: {
+    column: string,
+    currentSort: 'asc' | 'desc' | null,
+    onSort: (key: string, direction: 'asc' | 'desc' | null) => void
+}) {
+    return (
+        <button
+            onClick={() => {
+                if (!currentSort) onSort(column, 'asc');
+                else if (currentSort === 'asc') onSort(column, 'desc');
+                else onSort(column, null);
+            }}
+            className={`p-2 rounded-lg transition-colors ${currentSort
+                ? 'bg-brand-primary/20 text-brand-primary border border-brand-primary/50'
+                : 'bg-dark border border-border-muted text-muted hover:text-white'
+                }`}
+            title={currentSort === 'asc' ? 'Sorted Ascending' : currentSort === 'desc' ? 'Sorted Descending' : 'Not Sorted'}
+        >
+            {currentSort === 'asc' ? <SortAsc className="w-4 h-4" /> :
+                currentSort === 'desc' ? <SortDesc className="w-4 h-4" /> :
+                    <SortAsc className="w-4 h-4 opacity-50" />}
+        </button>
     );
 }
 
@@ -711,7 +1039,13 @@ export function UsersPage() {
 // SUB-COMPONENTS
 // ============================================================================
 
-function UserDetails({ user, roles, onEdit }: { user: User; roles: Role[]; onEdit: () => void }) {
+function UserDetails({ user, roles, onEdit, onStatusChange, showToast }: {
+    user: User;
+    roles: Role[];
+    onEdit: () => void;
+    onStatusChange: (user: User, status: User['status']) => void;
+    showToast: (message: string, type: 'success' | 'error' | 'info') => void;
+}) {
     return (
         <div className="space-y-6">
             <div className="flex items-center gap-4">
@@ -766,7 +1100,7 @@ function UserDetails({ user, roles, onEdit }: { user: User; roles: Role[]; onEdi
                             if (user.role === 'admin' || user.role === 'super_admin') {
                                 showToast('Administrative accounts cannot be suspended', 'error');
                             } else {
-                                handleStatusChange(user, 'suspended');
+                                onStatusChange(user, 'suspended');
                             }
                         }}
                         className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-orange-500/50 text-orange-400 rounded-lg hover:bg-orange-500/10 transition-colors text-sm font-medium"
@@ -775,7 +1109,7 @@ function UserDetails({ user, roles, onEdit }: { user: User; roles: Role[]; onEdi
                     </button>
                 ) : (
                     <button
-                        onClick={() => handleStatusChange(user, 'active')}
+                        onClick={() => onStatusChange(user, 'active')}
                         className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-green-500/50 text-green-400 rounded-lg hover:bg-green-500/10 transition-colors text-sm font-medium"
                     >
                         <CheckCircle className="w-4 h-4" /> Activate Account
@@ -790,11 +1124,11 @@ interface InviteUserFormProps {
     user: User | null;
     roles: Role[];
     onSave: (data: any) => void;
-    onCancel: () => void;
+    onClose: () => void;
     isEdit: boolean;
 }
 
-function InviteUserForm({ user, roles, onSave, onCancel, isEdit }: InviteUserFormProps) {
+function InviteUserForm({ user, roles, onSave, onClose, isEdit }: InviteUserFormProps) {
     const [email, setEmail] = useState(user?.email || '');
     const [firstName, setFirstName] = useState(user?.first_name || '');
     const [lastName, setLastName] = useState(user?.last_name || '');
@@ -870,7 +1204,7 @@ function InviteUserForm({ user, roles, onSave, onCancel, isEdit }: InviteUserFor
             )}
 
             <div className="flex gap-3 pt-4 border-t border-border-muted">
-                <button type="button" onClick={onCancel} className="flex-1 px-4 py-2 border border-border-muted rounded-lg hover:bg-white/5">Cancel</button>
+                <button type="button" onClick={onClose} className="flex-1 px-4 py-2 border border-border-muted rounded-lg hover:bg-white/5">Cancel</button>
                 <button type="submit" className="flex-1 px-4 py-2 bg-brand-primary text-white rounded-lg font-semibold hover:bg-brand-primary/90">
                     {isEdit ? 'Save Changes' : sendInvite ? 'Send Invitation' : 'Create User'}
                 </button>

@@ -11,6 +11,8 @@ This document serves as the source of truth for AI agents and human developers w
 
 ---
 
+## Ensure migrations are applied consistently (local/remote)
+
 ## 🚀 How to Add a New Module
 
 ### 1. Create Folder Structure
@@ -68,12 +70,37 @@ You MUST add your module to the bootstrap files for it to be discovered:
 - **Support Multi-Tenancy**: Ensure your database queries always include `WHERE tenant_id = ?`.
 - **Use standard UI Components**: Use the shared components in the `web/src/components` to maintain visual consistency.
 - **Update Workspace Dependencies**: If you add a module, update `backend/package.json` and `web/package.json` so they can resolve the package.
+- **Verify Rendering**: After adding state-driven UI (modals, drawers), verify they are present in the final `return` block of the component.
+- **Check for Shadowing**: Before adding routes, search for existing modules in `packages/` that might already handle the logic.
 
 ### ❌ DON'T
 - **No Hardcoded Lists**: Never add a module ID directly to `SideNav.tsx` or `modules.ts` routes. Use the dynamic `getSidebarMenu` or `getAll` methods.
 - **No Restrictive rootDir**: Avoid `rootDir: "./src"` in package tsconfigs. It breaks cross-package type checking.
 - **No Circular Imports**: If `Module A` depends on `Module B`, ensure `Module B` is loaded first in the bootstrap process.
 - **Don't Forget the Registry**: If your module has settings, register them via the `settings` property in `ModuleConfig` so they appear in Global Settings.
+- **No Loose Files in Routes**: Avoid adding files to `backend/src/routes/v1/` if a module in `packages/` already handles that domain.
+
+---
+
+## 🛡️ Code Integrity & Stability Rules
+
+### 1. Route Shadowing Prevention
+The project uses a hybrid architecture (Legacy V1 + Modular). **Modular routes always take precedence.**
+- **Rule**: If you see a package in `packages/modules-[name]`, all logic for that feature MUST live there.
+- **Check**: Run `grep -r "/api/v1/[name]"` to see if routes are defined in multiple places.
+
+### 2. Syntax Hygiene (The "Comment" Rule)
+When removing logs or cleaning up code:
+- **Rule**: Never leave trailing comment delimiters (`/*`, `/**`, `*/`) or unbalanced braces.
+- **Verification**: If a route or function "stops working" after an edit, check for accidentally commented-out code.
+
+### 3. UI Implementation Completeness
+- **Rule**: Handlers and State are only half the job. Always verify that the component is rendered in the JSX.
+- **Check**: Search the file for the component usage (e.g., `<ActionConfirmModal ... />`) after implementing the logic.
+
+### 4. KV & D1 Binding Consistency
+- **Rule**: Always verify binding names in `wrangler.toml` before writing backend logic.
+- **Warning**: Inconsistent names (e.g., `KV` vs `TENANT_MANIFESTS`) will cause 500 errors.
 
 ---
 

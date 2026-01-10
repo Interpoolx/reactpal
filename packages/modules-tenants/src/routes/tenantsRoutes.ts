@@ -17,15 +17,32 @@ export function registerTenantsRoutes(app: Hono<any>): void {
      */
     tenants.get('/', async (c) => {
         const db = c.env.DB;
+        const status = c.req.query('status');
+        const search = c.req.query('search');
 
         try {
-            // Simple query using only guaranteed columns
-            const results = await db.prepare(`
-                SELECT t.id, t.name, t.slug, t.status, td.domain
+            let query = `
+                SELECT t.id, t.name, t.slug, t.status, td.domain, t.plan_name, t.created_at
                 FROM tenants t
                 LEFT JOIN tenant_domains td ON t.id = td.tenant_id AND td.is_primary = 1
-                ORDER BY t.name ASC
-            `).all();
+                WHERE 1=1
+            `;
+            const params: any[] = [];
+
+            if (status && status !== 'all') {
+                query += ' AND t.status = ?';
+                params.push(status);
+            }
+
+            if (search) {
+                query += ' AND (t.name LIKE ? OR t.slug LIKE ? OR td.domain LIKE ?)';
+                const searchTerm = `%${search}%`;
+                params.push(searchTerm, searchTerm, searchTerm);
+            }
+
+            query += ' ORDER BY t.name ASC';
+
+            const results = await db.prepare(query).bind(...params).all();
             return c.json(results.results || []);
         } catch (error: any) {
             console.error('Tenants fetch error:', error);
@@ -88,7 +105,7 @@ export function registerTenantsRoutes(app: Hono<any>): void {
      */
     tenants.post('/', async (c) => {
         const db = c.env.DB;
-        const kv = c.env.KV;
+        const kv = c.env.TENANT_MANIFESTS;
         const body = await c.req.json();
 
         const {
@@ -108,28 +125,28 @@ export function registerTenantsRoutes(app: Hono<any>): void {
 
         const id = crypto.randomUUID();
         const now = Math.floor(Date.now() / 1000);
-        const trialEndsAt = status === 'trial' ? now + (14 * 24 * 60 * 60) : null; // 14 days trial
+        const trialEndsAt = status === 'trial' ? now + (14 * 24 * 60 * 60) : null;
 
         try {
-            // Insert tenant
+            // Insert tenant into the database with all actual columns
             await db.prepare(`
-        INSERT INTO tenants (
-          id, name, slug, domain, status, owner_email,
-          plan_name, max_users, max_storage, max_api_calls,
-          trial_ends_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(
-                id, name, slug, domain, status, ownerEmail,
-                planName, maxUsers, maxStorage, 1000,
-                trialEndsAt, now
+                INSERT INTO tenants (
+                    id, name, slug, domain, status, owner_email, 
+                    plan_name, max_users, max_storage, trial_ends_at,
+                    created_at, updated_at, config
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+                id, name, slug, domain || null, status, ownerEmail || null,
+                planName, maxUsers, maxStorage, trialEndsAt,
+                now, now, JSON.stringify({})
             ).run();
 
             // Add domain to lookup table
             if (domain) {
                 await db.prepare(`
-          INSERT INTO tenant_domains (id, tenant_id, domain, is_primary, created_at)
-          VALUES (?, ?, ?, 1, ?)
-        `).bind(crypto.randomUUID(), id, domain, now).run();
+                    INSERT INTO tenant_domains (id, tenant_id, domain, is_primary, created_at)
+                    VALUES (?, ?, ?, 1, ?)
+                `).bind(crypto.randomUUID(), id, domain, now).run();
 
                 // Update KV manifest for fast domain lookup
                 if (kv) {
@@ -162,9 +179,11 @@ export function registerTenantsRoutes(app: Hono<any>): void {
      */
     tenants.patch('/:id', async (c) => {
         const db = c.env.DB;
+        const kv = c.env.TENANT_MANIFESTS;
         const id = c.req.param('id');
         const body = await c.req.json();
 
+        // These columns now all exist in the database
         const allowedFields = [
             'name', 'slug', 'domain', 'status', 'owner_email', 'billing_email',
             'plan_name', 'plan_id', 'max_users', 'max_storage', 'max_api_calls',
@@ -190,12 +209,54 @@ export function registerTenantsRoutes(app: Hono<any>): void {
             return c.json({ error: 'No fields to update' }, 400);
         }
 
-        updates.push('updated_at = ?');
-        params.push(Math.floor(Date.now() / 1000));
-        params.push(id);
-
         try {
+            // Update main tenant fields
+            updates.push('updated_at = ?');
+            params.push(Math.floor(Date.now() / 1000));
+            params.push(id);
             await db.prepare(`UPDATE tenants SET ${updates.join(', ')} WHERE id = ?`).bind(...params).run();
+
+            // Handle domain update in KV if domain was updated
+            const newDomain = body.domain;
+            if (newDomain !== undefined) {
+                // Get current primary domain for KV cleanup
+                const currentDomain = await db.prepare(
+                    'SELECT domain FROM tenant_domains WHERE tenant_id = ? AND is_primary = 1'
+                ).bind(id).first();
+
+                if (currentDomain?.domain && currentDomain.domain !== newDomain) {
+                    // Delete old KV entry
+                    if (kv) {
+                        const manifest = await kv.get('tenant_manifest', 'json') || {};
+                        delete manifest[currentDomain.domain];
+                        await kv.put('tenant_manifest', JSON.stringify(manifest));
+                    }
+                }
+
+                // Delete old primary domain
+                await db.prepare(
+                    'DELETE FROM tenant_domains WHERE tenant_id = ? AND is_primary = 1'
+                ).bind(id).run();
+
+                // Insert new primary domain if provided
+                if (newDomain) {
+                    await db.prepare(`
+                        INSERT INTO tenant_domains (id, tenant_id, domain, is_primary, created_at)
+                        VALUES (?, ?, ?, 1, ?)
+                    `).bind(crypto.randomUUID(), id, newDomain, Math.floor(Date.now() / 1000)).run();
+
+                    // Update KV manifest
+                    if (kv) {
+                        const tenant = await db.prepare('SELECT name, slug FROM tenants WHERE id = ?').bind(id).first();
+                        if (tenant) {
+                            const manifest = await kv.get('tenant_manifest', 'json') || {};
+                            manifest[newDomain] = { id, slug: tenant.slug, name: tenant.name };
+                            await kv.put('tenant_manifest', JSON.stringify(manifest));
+                        }
+                    }
+                }
+            }
+
             return c.json({ success: true });
         } catch (error: any) {
             return c.json({ error: 'Failed to update tenant', message: error.message }, 500);
@@ -210,17 +271,14 @@ export function registerTenantsRoutes(app: Hono<any>): void {
         const db = c.env.DB;
         const id = c.req.param('id');
         const { reason } = await c.req.json();
+        const now = Math.floor(Date.now() / 1000);
 
         try {
             await db.prepare(`
-        UPDATE tenants SET status = 'suspended', suspended_at = ?, suspended_reason = ?, updated_at = ?
-        WHERE id = ?
-      `).bind(
-                Math.floor(Date.now() / 1000),
-                reason || 'Suspended by administrator',
-                Math.floor(Date.now() / 1000),
-                id
-            ).run();
+                UPDATE tenants 
+                SET status = 'suspended', suspended_at = ?, suspended_reason = ?, updated_at = ?
+                WHERE id = ?
+            `).bind(now, reason || 'Suspended by administrator', now, id).run();
 
             return c.json({ success: true });
         } catch (error: any) {
@@ -235,12 +293,14 @@ export function registerTenantsRoutes(app: Hono<any>): void {
     tenants.post('/:id/reactivate', async (c) => {
         const db = c.env.DB;
         const id = c.req.param('id');
+        const now = Math.floor(Date.now() / 1000);
 
         try {
             await db.prepare(`
-        UPDATE tenants SET status = 'active', suspended_at = NULL, suspended_reason = NULL, updated_at = ?
-        WHERE id = ?
-      `).bind(Math.floor(Date.now() / 1000), id).run();
+                UPDATE tenants 
+                SET status = 'active', suspended_at = NULL, suspended_reason = NULL, updated_at = ?
+                WHERE id = ?
+            `).bind(now, id).run();
 
             return c.json({ success: true });
         } catch (error: any) {
@@ -250,19 +310,44 @@ export function registerTenantsRoutes(app: Hono<any>): void {
 
     /**
      * DELETE /api/v1/tenants/:id
-     * Soft delete (archive) a tenant
+     * Soft delete (archive) a tenant or permanently delete
      */
     tenants.delete('/:id', async (c) => {
         const db = c.env.DB;
+        const kv = c.env.TENANT_MANIFESTS;
         const id = c.req.param('id');
+        const permanent = c.req.query('permanent') === 'true';
+        const now = Math.floor(Date.now() / 1000);
 
         try {
-            await db.prepare(`
-        UPDATE tenants SET status = 'archived', deleted_at = ?, updated_at = ?
-        WHERE id = ?
-      `).bind(Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000), id).run();
+            // Get tenant domains for KV cleanup
+            const domains = await db.prepare(
+                'SELECT domain FROM tenant_domains WHERE tenant_id = ?'
+            ).bind(id).all();
 
-            return c.json({ success: true });
+            if (permanent) {
+                // Hard delete from database
+                await db.prepare('DELETE FROM tenant_domains WHERE tenant_id = ?').bind(id).run();
+                await db.prepare('DELETE FROM tenants WHERE id = ?').bind(id).run();
+            } else {
+                // Soft delete: just update status to 'archived'
+                await db.prepare(`
+                    UPDATE tenants 
+                    SET status = 'archived', deleted_at = ?, updated_at = ?
+                    WHERE id = ?
+                `).bind(now, now, id).run();
+            }
+
+            // Cleanup KV for all domains
+            if (kv && domains.results) {
+                for (const row of (domains.results as any[])) {
+                    if (row.domain) {
+                        await kv.delete(`tenant:${row.domain}`);
+                    }
+                }
+            }
+
+            return c.json({ success: true, permanent });
         } catch (error: any) {
             return c.json({ error: 'Failed to delete tenant', message: error.message }, 500);
         }

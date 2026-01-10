@@ -253,6 +253,7 @@ CREATE TABLE IF NOT EXISTS settings_audit (
 -- ============================================================================
 -- Add status lifecycle columns
 ALTER TABLE tenants ADD COLUMN status TEXT DEFAULT 'active';
+ALTER TABLE tenants ADD COLUMN domain TEXT; -- Primary domain cache
 ALTER TABLE tenants ADD COLUMN trial_ends_at INTEGER;
 ALTER TABLE tenants ADD COLUMN suspended_at INTEGER;
 ALTER TABLE tenants ADD COLUMN suspended_reason TEXT;

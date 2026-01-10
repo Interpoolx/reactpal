@@ -209,10 +209,10 @@ export function BulkImportModal({ isOpen, onClose, onSuccess }: BulkImportModalP
                         initial={{ opacity: 0, scale: 0.95 }}
                         animate={{ opacity: 1, scale: 1 }}
                         exit={{ opacity: 0, scale: 0.95 }}
-                        className="fixed inset-4 md:inset-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:w-[700px] md:max-h-[85vh] bg-darker border border-border-muted rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden"
+                        className="fixed inset-4 md:inset-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:w-[700px] max-h-[90vh] bg-darker border border-border-muted rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden"
                     >
                         {/* Header */}
-                        <div className="flex items-center justify-between p-5 border-b border-border-muted">
+                        <div className="flex items-center justify-between p-5 border-b border-border-muted shrink-0 bg-darker">
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-xl bg-brand-primary/20 flex items-center justify-center">
                                     <Upload className="w-5 h-5 text-brand-primary" />
@@ -400,7 +400,7 @@ export function BulkImportModal({ isOpen, onClose, onSuccess }: BulkImportModalP
                         </div>
 
                         {/* Footer Actions */}
-                        <div className="flex items-center justify-between p-5 border-t border-border-muted bg-dark/30">
+                        <div className="flex items-center justify-between p-5 border-t border-border-muted bg-dark/30 shrink-0">
                             {step === 'input' && (
                                 <>
                                     <button

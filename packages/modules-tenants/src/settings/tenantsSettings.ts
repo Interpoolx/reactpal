@@ -36,24 +36,6 @@ export const tenantsSettingsSection: SettingSection = {
             group: 'Admin UI',
         },
         {
-            key: 'tenants.ui.showStatusFilter',
-            label: 'Show Status Filter',
-            type: 'boolean',
-            description: 'Show dropdown to filter by tenant status',
-            defaultValue: true,
-            scope: 'platform',
-            group: 'Admin UI',
-        },
-        {
-            key: 'tenants.ui.showPlanFilter',
-            label: 'Show Plan Filter',
-            type: 'boolean',
-            description: 'Show dropdown to filter by plan type',
-            defaultValue: true,
-            scope: 'platform',
-            group: 'Admin UI',
-        },
-        {
             key: 'tenants.ui.showExportCSV',
             label: 'Enable CSV Export',
             type: 'boolean',
@@ -164,6 +146,109 @@ export const tenantsSettingsSection: SettingSection = {
         { key: 'tenants.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Table Columns' },
         { key: 'tenants.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
         { key: 'tenants.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
+
+        // ============================================================
+        // FILTER CONFIGURATION
+        // JSON structure for dynamic filter settings per column
+        // ============================================================
+        {
+            key: 'tenants.ui.filterConfig',
+            label: 'Filter Configuration',
+            type: 'filterConfig',
+            description: 'Configure which columns appear as filters and how they behave',
+            scope: 'platform',
+            group: 'Filters',
+            defaultValue: {
+                name: {
+                    enabled: false,
+                    type: 'text',
+                    label: 'Name',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                slug: {
+                    enabled: false,
+                    type: 'text',
+                    label: 'Slug',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                domain: {
+                    enabled: false,
+                    type: 'text',
+                    label: 'Domain',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                status: {
+                    enabled: true,
+                    type: 'select',
+                    label: 'Status',
+                    options: 'auto',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                planName: {
+                    enabled: true,
+                    type: 'select',
+                    label: 'Plan',
+                    options: 'auto',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                ownerEmail: {
+                    enabled: false,
+                    type: 'text',
+                    label: 'Owner',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                industry: {
+                    enabled: false,
+                    type: 'select',
+                    label: 'Industry',
+                    options: 'auto',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                companySize: {
+                    enabled: false,
+                    type: 'select',
+                    label: 'Company Size',
+                    options: 'auto',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                billingStatus: {
+                    enabled: false,
+                    type: 'select',
+                    label: 'Billing Status',
+                    options: 'auto',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                createdAt: {
+                    enabled: false,
+                    type: 'date-range',
+                    label: 'Created Date',
+                    sortOptions: ['newest', 'oldest'],
+                    defaultSort: 'newest'
+                },
+                trialEndsAt: {
+                    enabled: false,
+                    type: 'date-range',
+                    label: 'Trial End Date',
+                    sortOptions: ['newest', 'oldest'],
+                    defaultSort: 'newest'
+                },
+                tags: {
+                    enabled: false,
+                    type: 'multi-select',
+                    label: 'Tags',
+                    options: 'auto'
+                }
+            }
+        },
 
         // ============================================================
         // DEFAULT TENANT SETTINGS

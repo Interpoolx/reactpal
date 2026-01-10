@@ -295,7 +295,7 @@ function UsersSettings() {
             moduleId="users"
             title="Users Settings"
             description="Configure user management options"
-            filterGroups={['Seed Data', 'Users Admin UI', 'Users Table Columns']}
+            filterGroups={['Seed Data', 'Users Admin UI', 'Users Table Columns', 'Users Filters']}
         />
     );
 }
@@ -308,7 +308,7 @@ function UsersSettings() {
 interface SettingFieldDef {
     key: string;
     label: string;
-    type: 'text' | 'number' | 'boolean' | 'select' | 'color' | 'textarea' | 'button' | 'action';
+    type: 'text' | 'number' | 'boolean' | 'select' | 'color' | 'textarea' | 'button' | 'action' | 'filterConfig';
     description?: string;
     defaultValue: any;
     options?: Array<{ label: string; value: any }>;
@@ -374,45 +374,53 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
         }
     };
 
+
     const loadSettings = async () => {
         setIsLoading(true);
         try {
-            // Fetch settings schema from API
-            const res = await apiFetch(`/api/v1/settings/sections/${moduleId}?tenantId=${activeTenant?.id || 'default'}`);
-            if (res.ok) {
-                const data = await res.json();
-                let fieldsData = data.fields || [];
-
-                // Filter by groups if specified
-                if (filterGroups && filterGroups.length > 0) {
-                    fieldsData = fieldsData.filter((f: SettingFieldDef) =>
-                        f.group && filterGroups.includes(f.group)
-                    );
-                }
-
-                setFields(fieldsData);
-
-                // Initialize values: defaults -> DB values
-                const initialValues: Record<string, any> = {};
-                fieldsData.forEach((field: SettingFieldDef) => {
-                    initialValues[field.key] = field.defaultValue;
-                });
-
-                // Overlay values from DB
-                if (data.values) {
-                    Object.keys(data.values).forEach(key => {
-                        if (data.values[key] !== undefined) {
-                            initialValues[key] = data.values[key];
-                        }
-                    });
-                }
-
-                setSettings(initialValues);
-            } else {
-                // API returned 404 or error - use fallback
-                console.log(`Settings API not available for ${moduleId}, using fallback`);
-                applyFallbackFields();
+            // Get fallback fields first (these contain the latest field definitions)
+            let fallbackFields: SettingFieldDef[] = [];
+            if (moduleId === 'users') {
+                fallbackFields = getUsersAdminUIFields();
+            } else if (moduleId === 'tenants') {
+                fallbackFields = getTenantsAdminUIFields();
             }
+
+            // Filter fallback by groups if specified
+            if (filterGroups && filterGroups.length > 0) {
+                fallbackFields = fallbackFields.filter((f) =>
+                    f.group && filterGroups.includes(f.group)
+                );
+            }
+
+            // Set fields from fallback (this ensures all groups including Filters appear)
+            setFields(fallbackFields);
+
+            // Initialize values from fallback defaults
+            const initialValues: Record<string, any> = {};
+            fallbackFields.forEach((field) => {
+                initialValues[field.key] = field.defaultValue;
+            });
+
+            // Load saved settings from database via API
+            try {
+                const res = await apiFetch(`/api/v1/settings/sections/${moduleId}?tenantId=${activeTenant?.id || 'default'}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    // Overlay values from DB (API already merges defaults)
+                    if (data.values) {
+                        Object.keys(data.values).forEach(key => {
+                            if (data.values[key] !== undefined) {
+                                initialValues[key] = data.values[key];
+                            }
+                        });
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load settings from API:', err);
+            }
+
+            setSettings(initialValues);
         } catch (err) {
             console.error('Failed to load settings:', err);
             // Use fallback hardcoded fields
@@ -421,6 +429,7 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
             setIsLoading(false);
         }
     };
+
 
     const handleChange = (key: string, value: any) => {
         setSettings(prev => ({ ...prev, [key]: value }));
@@ -458,29 +467,26 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
     const handleSave = async () => {
         setIsSaving(true);
         try {
-            // Save to localStorage as fallback (API may not exist yet)
-            const storageKey = `settings_${moduleId}_${activeTenant?.id || 'default'}`;
-            localStorage.setItem(storageKey, JSON.stringify(settings));
+            // Save to database via API
+            const res = await apiFetch(`/api/v1/settings`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    tenantId: activeTenant?.id || 'default',
+                    moduleId,
+                    settings,
+                }),
+            });
 
-            // Try API save (may fail if endpoint doesn't exist)
-            try {
-                await apiFetch(`/api/v1/settings`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        tenantId: activeTenant?.id || 'default',
-                        moduleId,
-                        settings,
-                    }),
-                });
-            } catch {
-                // API not available, localStorage saved
+            if (!res.ok) {
+                const error = await res.json();
+                throw new Error(error.error || 'Failed to save settings');
             }
 
             showToast('Settings saved successfully!', 'success');
-        } catch (err) {
+        } catch (err: any) {
             console.error('Failed to save settings:', err);
-            showToast('Failed to save settings', 'error');
+            showToast(err.message || 'Failed to save settings', 'error');
         } finally {
             setIsSaving(false);
         }
@@ -551,11 +557,13 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
 
             {/* Active Tab Content */}
             <div className="space-y-4">
-                {/* Special compact UI for Table Columns */}
-                {activeGroup.includes('Table Columns') || activeGroup.includes('Columns') ? (
+                {/* Special compact UI for Table Columns only (Filters now use filterConfig) */}
+                {(activeGroup.includes('Table Columns') || activeGroup.includes('Columns')) && !activeGroup.includes('Filters') ? (
                     <div className="bg-dark rounded-xl border border-border-muted p-4">
                         <div className="flex items-center gap-2 mb-4">
-                            <span className="text-sm font-medium">Select columns to display in the table:</span>
+                            <span className="text-sm font-medium">
+                                Select columns to display in the table:
+                            </span>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                             {activeFields.map((field) => (
@@ -726,6 +734,145 @@ function SettingFieldRenderer({
                     {field.description && <p className="text-xs text-muted mt-1">{field.description}</p>}
                 </div>
             );
+        case 'filterConfig':
+            // Render a comprehensive filter configuration editor
+            const filterConfig = value ?? field.defaultValue ?? {};
+            return (
+                <div className="space-y-4">
+                    {Object.entries(filterConfig).map(([columnKey, config]: [string, any]) => {
+                        const [isExpanded, setIsExpanded] = React.useState(false);
+                        const columnConfig = config as {
+                            enabled: boolean;
+                            type: string;
+                            label: string;
+                            options?: string | any[];
+                            sortOptions?: string[];
+                            defaultSort?: string;
+                        };
+
+                        return (
+                            <div
+                                key={columnKey}
+                                className={`border rounded-lg transition-all ${columnConfig.enabled
+                                    ? 'border-brand-primary bg-brand-primary/5'
+                                    : 'border-border-muted bg-dark'
+                                    }`}
+                            >
+                                {/* Header - Always visible */}
+                                <div
+                                    className="flex items-center justify-between p-3 cursor-pointer"
+                                    onClick={() => setIsExpanded(!isExpanded)}
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <input
+                                            type="checkbox"
+                                            checked={columnConfig.enabled}
+                                            onClick={(e) => e.stopPropagation()}
+                                            onChange={(e) => {
+                                                const newConfig = { ...filterConfig };
+                                                newConfig[columnKey] = { ...columnConfig, enabled: e.target.checked };
+                                                onChange(newConfig);
+                                            }}
+                                            className="w-4 h-4 rounded border-border-muted"
+                                        />
+                                        <span className={`font-medium ${columnConfig.enabled ? 'text-white' : 'text-muted'}`}>
+                                            {columnConfig.label}
+                                        </span>
+                                        <span className={`text-xs px-2 py-0.5 rounded ${columnConfig.type === 'select' ? 'bg-blue-500/20 text-blue-400' :
+                                            columnConfig.type === 'date-range' ? 'bg-purple-500/20 text-purple-400' :
+                                                columnConfig.type === 'multi-select' ? 'bg-green-500/20 text-green-400' :
+                                                    'bg-gray-500/20 text-gray-400'
+                                            }`}>
+                                            {columnConfig.type}
+                                        </span>
+                                    </div>
+                                    <button
+                                        className="text-muted hover:text-white transition-colors p-1"
+                                        onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+                                    >
+                                        ⚙️
+                                    </button>
+                                </div>
+
+                                {/* Expanded settings */}
+                                {isExpanded && columnConfig.enabled && (
+                                    <div className="border-t border-border-muted p-3 space-y-3">
+                                        {/* Filter Type */}
+                                        <div className="flex items-center gap-3">
+                                            <label className="text-sm text-muted min-w-24">Filter Type:</label>
+                                            <select
+                                                value={columnConfig.type}
+                                                onChange={(e) => {
+                                                    const newConfig = { ...filterConfig };
+                                                    newConfig[columnKey] = { ...columnConfig, type: e.target.value };
+                                                    onChange(newConfig);
+                                                }}
+                                                className="px-2 py-1 bg-dark border border-border-muted rounded text-sm"
+                                            >
+                                                <option value="text">Text Search</option>
+                                                <option value="select">Dropdown</option>
+                                                <option value="multi-select">Multi-Select</option>
+                                                <option value="date-range">Date Range</option>
+                                                <option value="number-range">Number Range</option>
+                                            </select>
+                                        </div>
+
+                                        {/* Options source for select types */}
+                                        {(columnConfig.type === 'select' || columnConfig.type === 'multi-select') && (
+                                            <div className="flex items-center gap-3">
+                                                <label className="text-sm text-muted min-w-24">Options:</label>
+                                                <select
+                                                    value={columnConfig.options === 'auto' ? 'auto' : 'custom'}
+                                                    onChange={(e) => {
+                                                        const newConfig = { ...filterConfig };
+                                                        newConfig[columnKey] = {
+                                                            ...columnConfig,
+                                                            options: e.target.value === 'auto' ? 'auto' : []
+                                                        };
+                                                        onChange(newConfig);
+                                                    }}
+                                                    className="px-2 py-1 bg-dark border border-border-muted rounded text-sm"
+                                                >
+                                                    <option value="auto">Auto-load from data</option>
+                                                    <option value="custom">Custom options</option>
+                                                </select>
+                                            </div>
+                                        )}
+
+                                        {/* Sort Options */}
+                                        {columnConfig.sortOptions && columnConfig.sortOptions.length > 0 && (
+                                            <div className="flex items-start gap-3">
+                                                <label className="text-sm text-muted min-w-24 pt-1">Sort:</label>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {columnConfig.sortOptions.map((opt: string) => (
+                                                        <span
+                                                            key={opt}
+                                                            className={`px-2 py-1 text-xs rounded cursor-pointer transition-colors ${columnConfig.defaultSort === opt
+                                                                ? 'bg-brand-primary text-white'
+                                                                : 'bg-dark border border-border-muted hover:border-brand-primary'
+                                                                }`}
+                                                            onClick={() => {
+                                                                const newConfig = { ...filterConfig };
+                                                                newConfig[columnKey] = { ...columnConfig, defaultSort: opt };
+                                                                onChange(newConfig);
+                                                            }}
+                                                        >
+                                                            {opt === 'a-z' ? 'A → Z' :
+                                                                opt === 'z-a' ? 'Z → A' :
+                                                                    opt === 'newest' ? 'Newest' :
+                                                                        opt === 'oldest' ? 'Oldest' : opt}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            );
 
         default: // text
             return (
@@ -748,8 +895,6 @@ function getUsersAdminUIFields(): SettingFieldDef[] {
     return [
         { key: 'users.ui.showStatsCards', label: 'Show Stats Cards', type: 'boolean', description: 'Display summary stats above the table', defaultValue: true, group: 'Users Admin UI' },
         { key: 'users.ui.showSearch', label: 'Enable Search', type: 'boolean', description: 'Show search input for filtering users', defaultValue: true, group: 'Users Admin UI' },
-        { key: 'users.ui.showStatusFilter', label: 'Show Status Filter', type: 'boolean', description: 'Show dropdown to filter by user status', defaultValue: true, group: 'Users Admin UI' },
-        { key: 'users.ui.showRoleFilter', label: 'Show Role Filter', type: 'boolean', description: 'Show dropdown to filter by user role', defaultValue: true, group: 'Users Admin UI' },
         { key: 'users.ui.showExport', label: 'Enable Export', type: 'boolean', description: 'Allow exporting user data', defaultValue: true, group: 'Users Admin UI' },
         { key: 'users.ui.showImport', label: 'Enable Import', type: 'boolean', description: 'Allow bulk user import', defaultValue: true, group: 'Users Admin UI' },
         { key: 'users.ui.showBulkActions', label: 'Enable Bulk Actions', type: 'boolean', description: 'Allow bulk role change, suspend, delete', defaultValue: true, group: 'Users Admin UI' },
@@ -765,6 +910,25 @@ function getUsersAdminUIFields(): SettingFieldDef[] {
         { key: 'users.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
         { key: 'users.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, group: 'Users Table Columns' },
         { key: 'users.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, group: 'Users Table Columns' },
+
+        // Filter Configuration - JSON structure for dynamic filter settings
+        {
+            key: 'users.ui.filterConfig',
+            label: 'Filter Configuration',
+            type: 'filterConfig',
+            description: 'Configure which columns appear as filters and how they behave',
+            group: 'Users Filters',
+            defaultValue: {
+                username: { enabled: false, type: 'text', label: 'Username', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                email: { enabled: false, type: 'text', label: 'Email', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                fullName: { enabled: false, type: 'text', label: 'Full Name', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                role: { enabled: true, type: 'select', label: 'Role', options: 'auto', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                status: { enabled: true, type: 'select', label: 'Status', options: 'auto', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                createdAt: { enabled: false, type: 'date-range', label: 'Created Date', sortOptions: ['newest', 'oldest'], defaultSort: 'newest' },
+                lastLogin: { enabled: false, type: 'date-range', label: 'Last Login', sortOptions: ['newest', 'oldest'], defaultSort: 'newest' },
+                createdBy: { enabled: false, type: 'text', label: 'Created By', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' }
+            }
+        },
 
         // Seed Data Fallback
         {
@@ -787,8 +951,6 @@ function getTenantsAdminUIFields(): SettingFieldDef[] {
         // Admin UI
         { key: 'tenants.ui.showStatsCards', label: 'Show Stats Cards', type: 'boolean', description: 'Display summary stats (Total, Active, Trial, Plans) above the table', defaultValue: true, group: 'Admin UI' },
         { key: 'tenants.ui.showSearch', label: 'Enable Search', type: 'boolean', description: 'Show search input for filtering tenants', defaultValue: true, group: 'Admin UI' },
-        { key: 'tenants.ui.showStatusFilter', label: 'Show Status Filter', type: 'boolean', description: 'Show dropdown to filter by tenant status', defaultValue: true, group: 'Admin UI' },
-        { key: 'tenants.ui.showPlanFilter', label: 'Show Plan Filter', type: 'boolean', description: 'Show dropdown to filter by plan type', defaultValue: true, group: 'Admin UI' },
         { key: 'tenants.ui.showExportCSV', label: 'Enable CSV Export', type: 'boolean', description: 'Allow exporting tenant data to CSV', defaultValue: true, group: 'Admin UI' },
         { key: 'tenants.ui.showBulkImport', label: 'Enable Bulk Import', type: 'boolean', description: 'Allow bulk tenant creation via import', defaultValue: true, group: 'Admin UI' },
         { key: 'tenants.ui.showQuickActions', label: 'Enable Quick Actions', type: 'boolean', description: 'Show quick actions dropdown (Edit, Clone, Suspend, etc.)', defaultValue: true, group: 'Admin UI' },
@@ -849,6 +1011,29 @@ function getTenantsAdminUIFields(): SettingFieldDef[] {
         { key: 'tenants.requireDomainVerification', label: 'Require Domain Verification', type: 'boolean', description: 'Custom domains must be verified via DNS', defaultValue: true, group: 'Domains' },
         // Provisioning
         { key: 'tenants.autoProvisionModules', label: 'Auto-Provision Modules', type: 'text', description: 'Comma-separated list of modules to enable for new tenants', defaultValue: 'cms,seo', group: 'Provisioning' },
+
+        // Filter Configuration - JSON structure for dynamic filter settings
+        {
+            key: 'tenants.ui.filterConfig',
+            label: 'Filter Configuration',
+            type: 'filterConfig',
+            description: 'Configure which columns appear as filters and how they behave',
+            group: 'Filters',
+            defaultValue: {
+                name: { enabled: false, type: 'text', label: 'Name', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                slug: { enabled: false, type: 'text', label: 'Slug', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                domain: { enabled: false, type: 'text', label: 'Domain', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                status: { enabled: true, type: 'select', label: 'Status', options: 'auto', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                planName: { enabled: true, type: 'select', label: 'Plan', options: 'auto', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                ownerEmail: { enabled: false, type: 'text', label: 'Owner', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                industry: { enabled: false, type: 'select', label: 'Industry', options: 'auto', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                companySize: { enabled: false, type: 'select', label: 'Company Size', options: 'auto', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                billingStatus: { enabled: false, type: 'select', label: 'Billing Status', options: 'auto', sortOptions: ['a-z', 'z-a'], defaultSort: 'a-z' },
+                createdAt: { enabled: false, type: 'date-range', label: 'Created Date', sortOptions: ['newest', 'oldest'], defaultSort: 'newest' },
+                trialEndsAt: { enabled: false, type: 'date-range', label: 'Trial End Date', sortOptions: ['newest', 'oldest'], defaultSort: 'newest' },
+                tags: { enabled: false, type: 'multi-select', label: 'Tags', options: 'auto' }
+            }
+        },
     ];
 }
 

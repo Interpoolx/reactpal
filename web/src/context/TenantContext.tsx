@@ -6,6 +6,8 @@ interface Tenant {
     name: string;
     slug: string;
     domain: string;
+    max_users?: number;
+    current_users?: number;
 }
 
 interface TenantContextType {
@@ -82,9 +84,14 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
                 const found = tenantsArray.find((t: Tenant) => t.id === targetId || t.slug === targetId || t.domain === targetId);
 
                 const initial = found || tenantsArray[0] || null;
-                setActiveTenantState(initial);
 
-                // Sync URL if missing or mismatch (Using domain/slug for readability)
+                if (initial) {
+                    await setActiveTenantWithUsage(initial);
+                } else {
+                    setIsLoading(false);
+                }
+
+                // Sync URL if missing or mismatch
                 if (initial) {
                     const identifier = initial.domain || initial.slug || initial.id;
                     if (urlTenant !== identifier) {
@@ -93,7 +100,6 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
                         window.history.replaceState({}, '', newUrl);
                     }
                 }
-                setIsLoading(false);
             } catch (err) {
                 console.error('Failed to load tenants', err);
                 setIsLoading(false);
@@ -103,8 +109,33 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
         loadTenants();
     }, []);
 
+    const setActiveTenantWithUsage = async (tenant: Tenant) => {
+        setIsLoading(true);
+        try {
+            // Fetch usage
+            const res = await apiFetch(`/api/v1/tenants/${tenant.id}/usage`);
+            if (res.ok) {
+                const usage = await res.json();
+                // Map usage response to Tenant interface
+                // usage.users.current/max
+                const updatedTenant = {
+                    ...tenant,
+                    current_users: usage.users?.current || 0,
+                    max_users: usage.users?.max || 0
+                };
+                setActiveTenantState(updatedTenant);
+            } else {
+                setActiveTenantState(tenant);
+            }
+        } catch {
+            setActiveTenantState(tenant);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     const setActiveTenant = (tenant: Tenant) => {
-        setActiveTenantState(tenant);
+        setActiveTenantWithUsage(tenant);
         localStorage.setItem('rp_active_tenant', tenant.id);
 
         // Update URL to a readable identifier

@@ -129,24 +129,6 @@ export const usersSettingsSection: SettingSection = {
             group: 'Users Admin UI',
         },
         {
-            key: 'users.ui.showStatusFilter',
-            label: 'Show Status Filter',
-            type: 'boolean',
-            description: 'Show dropdown to filter by user status',
-            defaultValue: true,
-            scope: 'tenant',
-            group: 'Users Admin UI',
-        },
-        {
-            key: 'users.ui.showRoleFilter',
-            label: 'Show Role Filter',
-            type: 'boolean',
-            description: 'Show dropdown to filter by user role',
-            defaultValue: true,
-            scope: 'tenant',
-            group: 'Users Admin UI',
-        },
-        {
             key: 'users.ui.showExport',
             label: 'Enable Export',
             type: 'boolean',
@@ -220,6 +202,79 @@ export const usersSettingsSection: SettingSection = {
         { key: 'users.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Users Table Columns' },
         { key: 'users.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, scope: 'tenant', group: 'Users Table Columns' },
         { key: 'users.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, scope: 'tenant', group: 'Users Table Columns' },
+
+        // ============================================================
+        // FILTER CONFIGURATION
+        // JSON structure for dynamic filter settings per column
+        // ============================================================
+        {
+            key: 'users.ui.filterConfig',
+            label: 'Filter Configuration',
+            type: 'filterConfig',
+            description: 'Configure which columns appear as filters and how they behave',
+            scope: 'tenant',
+            group: 'Users Filters',
+            defaultValue: {
+                username: {
+                    enabled: false,
+                    type: 'text',
+                    label: 'Username',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                email: {
+                    enabled: false,
+                    type: 'text',
+                    label: 'Email',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                fullName: {
+                    enabled: false,
+                    type: 'text',
+                    label: 'Full Name',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                role: {
+                    enabled: true,
+                    type: 'select',
+                    label: 'Role',
+                    options: 'auto',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                status: {
+                    enabled: true,
+                    type: 'select',
+                    label: 'Status',
+                    options: 'auto',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                },
+                createdAt: {
+                    enabled: false,
+                    type: 'date-range',
+                    label: 'Created Date',
+                    sortOptions: ['newest', 'oldest'],
+                    defaultSort: 'newest'
+                },
+                lastLogin: {
+                    enabled: false,
+                    type: 'date-range',
+                    label: 'Last Login',
+                    sortOptions: ['newest', 'oldest'],
+                    defaultSort: 'newest'
+                },
+                createdBy: {
+                    enabled: false,
+                    type: 'text',
+                    label: 'Created By',
+                    sortOptions: ['a-z', 'z-a'],
+                    defaultSort: 'a-z'
+                }
+            }
+        },
 
     ],
 };

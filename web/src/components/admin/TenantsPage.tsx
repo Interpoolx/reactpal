@@ -8,10 +8,11 @@ import { useTenant } from '../../context/TenantContext';
 import {
     Globe, Building2, Search, X, MoreVertical, Edit2, Pause, Trash2,
     Check, AlertCircle, Upload, Calendar, Download, Play, Archive, Copy,
-    ExternalLink, Package, Plus
+    ExternalLink, Package, Plus, ArrowUpAZ, ArrowDownZA, SortAsc, SortDesc
 } from 'lucide-react';
 import { apiFetch } from '../../lib/api';
 import { useToast } from '../ui/Toast';
+import { ActionConfirmModal } from '../ui/ActionConfirmModal';
 
 // ============================================================================
 // TYPES
@@ -138,7 +139,6 @@ function QuickActions({
     onEdit,
     onSuspend,
     onActivate,
-    onArchive,
     onDelete,
     onClone
 }: {
@@ -146,7 +146,6 @@ function QuickActions({
     onEdit: () => void;
     onSuspend: () => void;
     onActivate: () => void;
-    onArchive: () => void;
     onDelete: () => void;
     onClone: () => void;
 }) {
@@ -170,11 +169,21 @@ function QuickActions({
         { type: 'divider' },
         ...(tenant.status === 'active'
             ? [{ label: 'Suspend', icon: Pause, onClick: onSuspend, color: 'text-yellow-400' }]
-            : [{ label: 'Activate', icon: Play, onClick: onActivate, color: 'text-green-400' }]
+            : tenant.status !== 'archived'
+                ? [{ label: 'Activate', icon: Play, onClick: onActivate, color: 'text-green-400' }]
+                : []
         ),
-        { label: 'Archive', icon: Archive, onClick: onArchive, color: 'text-gray-400' },
         { type: 'divider' },
-        { label: 'Delete', icon: Trash2, onClick: onDelete, color: 'text-red-400' },
+        ...(tenant.status === 'archived'
+            ? [{ label: 'Restore', icon: Play, onClick: onActivate, color: 'text-green-400' }]
+            : []
+        ),
+        {
+            label: tenant.status === 'archived' ? 'Delete Permanently' : 'Delete',
+            icon: Trash2,
+            onClick: onDelete,
+            color: 'text-red-400'
+        },
     ];
 
     return (
@@ -228,6 +237,31 @@ function PlanBadge({ plan }: { plan: string }) {
     );
 }
 
+function SortButton({ column, currentSort, onSort }: {
+    column: string,
+    currentSort: 'asc' | 'desc' | null,
+    onSort: (key: string, direction: 'asc' | 'desc' | null) => void
+}) {
+    return (
+        <button
+            onClick={() => {
+                if (!currentSort) onSort(column, 'asc');
+                else if (currentSort === 'asc') onSort(column, 'desc');
+                else onSort(column, null);
+            }}
+            className={`p-2 rounded-lg transition-colors ${currentSort
+                ? 'bg-brand-primary/20 text-brand-primary border border-brand-primary/50'
+                : 'bg-dark border border-border-muted text-muted hover:text-white'
+                }`}
+            title={currentSort === 'asc' ? 'Sorted Ascending' : currentSort === 'desc' ? 'Sorted Descending' : 'Not Sorted'}
+        >
+            {currentSort === 'asc' ? <SortAsc className="w-4 h-4" /> :
+                currentSort === 'desc' ? <SortDesc className="w-4 h-4" /> :
+                    <SortAsc className="w-4 h-4 opacity-50" />}
+        </button>
+    );
+}
+
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
@@ -248,41 +282,56 @@ export function TenantsPage() {
     const [pageSize, setPageSize] = useState(PAGINATION_CONFIG.defaultPageSize);
     const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({});
     const [uiSettings, setUiSettings] = useState<Record<string, any>>({});
+    const [filters, setFilters] = useState<Record<string, any>>({});
+    const [sorting, setSorting] = useState<Record<string, 'asc' | 'desc' | null>>({});
     const { activeTenant } = useTenant();
     const { showToast } = useToast();
 
-    // Load UI settings
+    // Action Confirmation Modal State
+    const [confirmModal, setConfirmModal] = useState<{
+        isOpen: boolean;
+        title: string;
+        description: string;
+        onConfirm: () => void;
+        variant: 'danger' | 'warning' | 'info';
+        confirmText?: string;
+    }>({
+        isOpen: false,
+        title: '',
+        description: '',
+        onConfirm: () => { },
+        variant: 'danger'
+    });
+
+    // Load UI settings from database
     useEffect(() => {
         const loadSettings = async () => {
             try {
-                const res = await apiFetch(`/api/v1/settings/sections/tenants`);
                 let settings: Record<string, any> = {};
 
+                // Load from database via API
+                const res = await apiFetch(`/api/v1/settings/sections/tenants?tenantId=${activeTenant?.id || 'default'}`);
                 if (res.ok) {
                     const data = await res.json();
-                    settings = data.values || {};
-                } else {
-                    const storageKey = `settings_tenants_${activeTenant?.id || 'default'}`;
-                    const saved = localStorage.getItem(storageKey);
-                    if (saved) settings = JSON.parse(saved);
+                    if (data.values) {
+                        settings = data.values;
+                    }
                 }
 
-                if (Object.keys(settings).length > 0) {
-                    setUiSettings(settings);
+                setUiSettings(settings);
 
-                    // Set visible columns
-                    const colSettings: Record<string, boolean> = {};
-                    Object.keys(settings).forEach(key => {
-                        if (key.startsWith('tenants.ui.columns.show')) {
-                            colSettings[key] = settings[key];
-                        }
-                    });
-                    setVisibleColumns(colSettings);
-
-                    // Set default page size if available
-                    if (settings['tenants.ui.defaultPageSize']) {
-                        setPageSize(parseInt(settings['tenants.ui.defaultPageSize']));
+                // Set visible columns
+                const colSettings: Record<string, boolean> = {};
+                Object.keys(settings).forEach(key => {
+                    if (key.startsWith('tenants.ui.columns.show')) {
+                        colSettings[key] = settings[key];
                     }
+                });
+                setVisibleColumns(colSettings);
+
+                // Set default page size if available
+                if (settings['tenants.ui.defaultPageSize']) {
+                    setPageSize(parseInt(settings['tenants.ui.defaultPageSize']));
                 }
             } catch (err) {
                 console.error('Failed to load settings', err);
@@ -311,35 +360,64 @@ export function TenantsPage() {
             const params = new URLSearchParams();
             if (debouncedSearch) params.set('search', debouncedSearch);
             if (statusFilter && statusFilter !== 'all') params.set('status', statusFilter);
+            if (planFilter && planFilter !== 'all') params.set('plan', planFilter);
 
             const url = `${PAGE_CONFIG.apiEndpoint}${params.toString() ? '?' + params.toString() : ''}`;
             const res = await apiFetch(url);
-            const data = await res.json();
-            let result = Array.isArray(data) ? data : [];
+            if (!res.ok) throw new Error('Failed to fetch tenants');
+            const result = await res.json();
 
-            // Client-side plan filter
-            if (planFilter && planFilter !== 'all') {
-                result = result.filter((t: Tenant) => (t.plan_name || 'free') === planFilter);
-            }
+            // We still support client-side dynamic filters and sorting for flexibility
+            let processed = [...result];
 
-            // Client-side search filter (fallback if backend doesn't filter)
-            if (debouncedSearch) {
-                const search = debouncedSearch.toLowerCase();
-                result = result.filter((t: Tenant) =>
-                    t.name?.toLowerCase().includes(search) ||
-                    t.slug?.toLowerCase().includes(search) ||
-                    t.domain?.toLowerCase().includes(search)
-                );
-            }
+            // Client-side dynamic filters
+            Object.entries(filters).forEach(([key, value]) => {
+                if (value && value !== 'all') {
+                    processed = processed.filter((t: any) => {
+                        const cellValue = t[key];
 
-            setTenants(result);
+                        // Handle range filters
+                        if (typeof value === 'object' && (value.min !== undefined || value.max !== undefined)) {
+                            const val = Number(cellValue || 0);
+                            if (value.min && val < Number(value.min)) return false;
+                            if (value.max && val > Number(value.max)) return false;
+                            return true;
+                        }
+
+                        if (typeof value === 'object' && (value.start !== undefined || value.end !== undefined)) {
+                            const val = cellValue ? new Date(cellValue).getTime() : 0;
+                            if (value.start && val < new Date(value.start).getTime()) return false;
+                            if (value.end && val > new Date(value.end).getTime()) return false;
+                            return true;
+                        }
+
+                        const strValue = String(cellValue || '').toLowerCase();
+                        return strValue.includes(String(value).toLowerCase());
+                    });
+                }
+            });
+
+            // Client-side dynamic sorting
+            Object.entries(sorting).forEach(([key, direction]) => {
+                if (direction) {
+                    processed.sort((a: any, b: any) => {
+                        const valA = a[key];
+                        const valB = b[key];
+                        if (valA < valB) return direction === 'asc' ? -1 : 1;
+                        if (valA > valB) return direction === 'asc' ? 1 : -1;
+                        return 0;
+                    });
+                }
+            });
+
+            setTenants(processed);
         } catch (err) {
             console.error('Failed to fetch tenants', err);
             showToast('Failed to fetch tenants', 'error');
         } finally {
             setIsLoading(false);
         }
-    }, [debouncedSearch, statusFilter, planFilter]);
+    }, [debouncedSearch, statusFilter, planFilter, filters, sorting]);
 
     // Debounce search
     useEffect(() => {
@@ -358,33 +436,88 @@ export function TenantsPage() {
     const handleAdd = () => { setEditingTenant(null); setDrawerOpen(true); };
     const handleEdit = (tenant: Tenant) => { setEditingTenant(tenant); setDrawerOpen(true); };
 
-    const handleDelete = async (rows: Tenant[]) => {
-        if (!confirm(`Delete ${rows.length} tenant(s)? This cannot be undone.`)) return;
-        try {
-            for (const row of rows) {
-                const res = await apiFetch(`${PAGE_CONFIG.apiEndpoint}/${row.id}`, { method: 'DELETE' });
-                if (!res.ok) throw new Error('Delete failed');
+    const handleDelete = async (rows: Tenant[], permanent = false) => {
+        setConfirmModal({
+            isOpen: true,
+            title: permanent ? 'Permanently Delete' : 'Archive Tenant',
+            description: permanent
+                ? `Are you sure you want to permanently delete ${rows.length} tenant(s)? This action cannot be undone and will remove all associated data.`
+                : `Are you sure you want to archive ${rows.length} tenant(s)? They will be moved to the Archived status and can be restored later.`,
+            confirmText: permanent ? 'Delete Permanently' : 'Archive',
+            variant: 'danger',
+            onConfirm: async () => {
+                try {
+                    setIsSaving(true);
+                    for (const row of rows) {
+                        const url = `${PAGE_CONFIG.apiEndpoint}/${row.id}${permanent ? '?permanent=true' : ''}`;
+                        const res = await apiFetch(url, { method: 'DELETE' });
+                        if (!res.ok) throw new Error('Action failed');
+                    }
+                    showToast(`${permanent ? 'Permanently deleted' : 'Archived'} ${rows.length} tenant(s)`, 'success');
+                    setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                    fetchTenants();
+                } catch (err: any) {
+                    showToast(err.message || 'Action failed', 'error');
+                } finally {
+                    setIsSaving(false);
+                }
             }
-            showToast(`Deleted ${rows.length} tenant(s)`, 'success');
-            fetchTenants();
-        } catch (err: any) {
-            showToast(err.message || 'Failed to delete', 'error');
-        }
+        });
     };
 
     const handleStatusChange = async (tenant: Tenant, newStatus: string) => {
-        try {
-            const res = await apiFetch(`${PAGE_CONFIG.apiEndpoint}/${tenant.id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ status: newStatus }),
+        const executeUpdate = async () => {
+            try {
+                let url = `${PAGE_CONFIG.apiEndpoint}/${tenant.id}`;
+                let method = 'PATCH';
+                let body: any = { status: newStatus };
+
+                if (newStatus === 'suspended') {
+                    url = `${PAGE_CONFIG.apiEndpoint}/${tenant.id}/suspend`;
+                    method = 'POST';
+                    body = { reason: 'Suspended by administrator' };
+                } else if (newStatus === 'active' && tenant.status === 'suspended') {
+                    url = `${PAGE_CONFIG.apiEndpoint}/${tenant.id}/reactivate`;
+                    method = 'POST';
+                    body = {};
+                }
+
+                const res = await apiFetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+
+                if (!res.ok) throw new Error('Failed to update status');
+
+                showToast(`Tenant ${newStatus} successfully`, 'success');
+                setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                fetchTenants();
+            } catch (err: any) {
+                showToast(err.message || 'Failed to update status', 'error');
+            }
+        };
+
+        if (newStatus === 'suspended') {
+            setConfirmModal({
+                isOpen: true,
+                title: 'Suspend Tenant',
+                description: `Are you sure you want to suspend "${tenant.name}"? This will disable access for all users of this tenant.`,
+                confirmText: 'Suspend',
+                variant: 'warning',
+                onConfirm: executeUpdate
             });
-            if (!res.ok) throw new Error('Failed to update status');
-            showToast(`Tenant ${newStatus} successfully`, 'success');
-            fetchTenants();
-        } catch (err: any) {
-            showToast(err.message || 'Failed to update status', 'error');
+        } else if (newStatus === 'archived') {
+            handleDelete([tenant], false);
+        } else {
+            executeUpdate();
         }
+    };
+
+    const handleEmptyArchive = () => {
+        const archivedTenants = tenants.filter(t => t.status === 'archived');
+        if (archivedTenants.length === 0) return;
+        handleDelete(archivedTenants, true);
     };
 
     const handleClone = async (tenant: Tenant) => {
@@ -399,10 +532,16 @@ export function TenantsPage() {
                     plan_name: tenant.plan_name || 'free',
                 }),
             });
-            if (!res.ok) throw new Error('Clone failed');
+
+            if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                throw new Error(errorData.message || errorData.error || 'Clone failed');
+            }
+
             showToast('Tenant cloned successfully', 'success');
             fetchTenants();
         } catch (err: any) {
+            console.error('Clone error:', err);
             showToast(err.message || 'Failed to clone tenant', 'error');
         }
     };
@@ -449,13 +588,26 @@ export function TenantsPage() {
         showToast(`Exported ${tenants.length} tenants`, 'success');
     };
 
+    const handleFilterChange = (key: string, value: any) => {
+        setFilters(prev => ({ ...prev, [key]: value }));
+        setCurrentPage(1);
+    };
+
+    const handleSortChange = (key: string, direction: 'asc' | 'desc' | null) => {
+        setSorting(prev => ({ ...prev, [key]: direction }));
+    };
+
     const clearFilters = () => {
         setSearchQuery('');
         setStatusFilter('all');
         setPlanFilter('all');
+        setFilters({});
+        setSorting({});
     };
 
-    const hasActiveFilters = searchQuery || statusFilter !== 'all' || planFilter !== 'all';
+    const hasActiveFilters = searchQuery || statusFilter !== 'all' || planFilter !== 'all' ||
+        Object.values(filters).some(v => v !== '' && v !== 'all' && v !== null) ||
+        Object.values(sorting).some(v => v !== null);
 
     // All available columns
     const allColumns: (ColumnDef<Tenant, any> & { showSetting?: string })[] = [
@@ -645,8 +797,7 @@ export function TenantsPage() {
                     onEdit={() => handleEdit(row.original)}
                     onSuspend={() => handleStatusChange(row.original, 'suspended')}
                     onActivate={() => handleStatusChange(row.original, 'active')}
-                    onArchive={() => handleStatusChange(row.original, 'archived')}
-                    onDelete={() => handleDelete([row.original])}
+                    onDelete={() => handleDelete([row.original], row.original.status === 'archived')}
                     onClone={() => handleClone(row.original)}
                 />
             ),
@@ -719,52 +870,181 @@ export function TenantsPage() {
                 </div>
             )}
 
-            {/* Filters (Config-Driven) */}
-            <div className={`flex flex-wrap items-center gap-4 p-4 bg-darker rounded-xl border border-border-muted ${(uiSettings['tenants.ui.showSearch'] === false && uiSettings['tenants.ui.showStatusFilter'] === false && uiSettings['tenants.ui.showPlanFilter'] === false) ? 'hidden' : ''}`}>
-                {uiSettings['tenants.ui.showSearch'] !== false && (
-                    <div className="relative flex-1 min-w-[200px]">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
-                        <input
-                            type="text"
-                            placeholder={PAGE_CONFIG.searchPlaceholder}
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full pl-10 pr-4 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
-                        />
+            {/* Filters (Dynamic Config-Driven) */}
+            {(() => {
+                const filterConfig = uiSettings['tenants.ui.filterConfig'] || {};
+                const searchEnabled = uiSettings['tenants.ui.showSearch'] !== false;
+
+                const enabledFilters = Object.entries(filterConfig)
+                    .filter(([_, config]: [string, any]) => config.enabled)
+                    .map(([key, config]: [string, any]) => ({ key, ...config }));
+
+                if (!searchEnabled && enabledFilters.length === 0) return null;
+
+                return (
+                    <div className="flex flex-wrap items-center gap-4 p-4 bg-darker rounded-xl border border-border-muted">
+                        {searchEnabled && (
+                            <div className="relative flex-1 min-w-[200px]">
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
+                                <input
+                                    type="text"
+                                    placeholder={PAGE_CONFIG.searchPlaceholder}
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    className="w-full pl-10 pr-4 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
+                                />
+                            </div>
+                        )}
+
+                        {enabledFilters.map((cfg) => {
+                            if (cfg.key === 'status') {
+                                return (
+                                    <select
+                                        key="status"
+                                        value={statusFilter}
+                                        onChange={(e) => setStatusFilter(e.target.value)}
+                                        className="px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm min-w-[120px]"
+                                    >
+                                        {FILTER_CONFIG.status.options.map(opt => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                        ))}
+                                    </select>
+                                );
+                            }
+                            if (cfg.key === 'planName') {
+                                return (
+                                    <select
+                                        key="plan"
+                                        value={planFilter}
+                                        onChange={(e) => setPlanFilter(e.target.value)}
+                                        className="px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm min-w-[120px]"
+                                    >
+                                        {FILTER_CONFIG.plan.options.map(opt => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                        ))}
+                                    </select>
+                                );
+                            }
+                            switch (cfg.type) {
+                                case 'select':
+                                case 'multi-select':
+                                    const options = cfg.options === 'auto'
+                                        ? [...new Set(tenants.map(t => (t as any)[cfg.key]))].filter(Boolean).map(v => ({ label: v, value: v }))
+                                        : (Array.isArray(cfg.options) ? cfg.options : []);
+
+                                    return (
+                                        <div key={cfg.key} className="flex flex-col gap-1">
+                                            <label className="text-[10px] font-bold text-muted uppercase tracking-wider pl-1">{cfg.label}</label>
+                                            <div className="flex items-center gap-2">
+                                                <select
+                                                    value={filters[cfg.key] || 'all'}
+                                                    onChange={(e) => handleFilterChange(cfg.key, e.target.value)}
+                                                    className="px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm min-w-[120px]"
+                                                >
+                                                    <option value="all">All {cfg.label}</option>
+                                                    {options.map((opt: any) => (
+                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                    ))}
+                                                </select>
+                                                {cfg.sortOptions && <SortButton column={cfg.key} currentSort={sorting[cfg.key]} onSort={handleSortChange} />}
+                                            </div>
+                                        </div>
+                                    );
+                                case 'text':
+                                    return (
+                                        <div key={cfg.key} className="flex flex-col gap-1">
+                                            <label className="text-[10px] font-bold text-muted uppercase tracking-wider pl-1">{cfg.label}</label>
+                                            <div className="flex items-center gap-2">
+                                                <div className="relative min-w-[150px]">
+                                                    <input
+                                                        type="text"
+                                                        placeholder={`Filter ${cfg.label}...`}
+                                                        value={filters[cfg.key] || ''}
+                                                        onChange={(e) => handleFilterChange(cfg.key, e.target.value)}
+                                                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
+                                                    />
+                                                </div>
+                                                {cfg.sortOptions && <SortButton column={cfg.key} currentSort={sorting[cfg.key]} onSort={handleSortChange} />}
+                                            </div>
+                                        </div>
+                                    );
+                                case 'number-range':
+                                    return (
+                                        <div key={cfg.key} className="flex flex-col gap-1">
+                                            <label className="text-[10px] font-bold text-muted uppercase tracking-wider pl-1">{cfg.label} Range</label>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex items-center bg-dark border border-border-muted rounded-lg overflow-hidden h-[38px]">
+                                                    <input
+                                                        type="number"
+                                                        placeholder="Min"
+                                                        value={filters[cfg.key]?.min || ''}
+                                                        onChange={(e) => handleFilterChange(cfg.key, { ...filters[cfg.key], min: e.target.value })}
+                                                        className="w-16 px-2 py-1 bg-transparent border-none text-xs focus:ring-0"
+                                                    />
+                                                    <div className="w-[1px] h-4 bg-border-muted" />
+                                                    <input
+                                                        type="number"
+                                                        placeholder="Max"
+                                                        value={filters[cfg.key]?.max || ''}
+                                                        onChange={(e) => handleFilterChange(cfg.key, { ...filters[cfg.key], max: e.target.value })}
+                                                        className="w-16 px-2 py-1 bg-transparent border-none text-xs focus:ring-0"
+                                                    />
+                                                </div>
+                                                {cfg.sortOptions && <SortButton column={cfg.key} currentSort={sorting[cfg.key]} onSort={handleSortChange} />}
+                                            </div>
+                                        </div>
+                                    );
+                                case 'date-range':
+                                    return (
+                                        <div key={cfg.key} className="flex flex-col gap-1">
+                                            <label className="text-[10px] font-bold text-muted uppercase tracking-wider pl-1">{cfg.label} Date</label>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex items-center bg-dark border border-border-muted rounded-lg overflow-hidden h-[38px]">
+                                                    <input
+                                                        type="date"
+                                                        value={filters[cfg.key]?.start || ''}
+                                                        onChange={(e) => handleFilterChange(cfg.key, { ...filters[cfg.key], start: e.target.value })}
+                                                        className="px-2 py-1 bg-transparent border-none text-[10px] focus:ring-0 w-28"
+                                                    />
+                                                    <div className="w-[1px] h-4 bg-border-muted" />
+                                                    <input
+                                                        type="date"
+                                                        value={filters[cfg.key]?.end || ''}
+                                                        onChange={(e) => handleFilterChange(cfg.key, { ...filters[cfg.key], end: e.target.value })}
+                                                        className="px-2 py-1 bg-transparent border-none text-[10px] focus:ring-0 w-28"
+                                                    />
+                                                </div>
+                                                {cfg.sortOptions && <SortButton column={cfg.key} currentSort={sorting[cfg.key]} onSort={handleSortChange} />}
+                                            </div>
+                                        </div>
+                                    );
+                                default:
+                                    return null;
+                            }
+                        })}
+
+                        {statusFilter === 'archived' && tenants.length > 0 && (
+                            <button
+                                onClick={handleEmptyArchive}
+                                className="ml-auto flex items-center gap-2 px-3 py-2 bg-red-500/10 text-red-500 border border-red-500/20 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors"
+                            >
+                                <Trash2 className="w-4 h-4" />
+                                Empty Archive
+                            </button>
+                        )}
+
+                        <div className={`overflow-hidden transition-all duration-300 flex items-center ${hasActiveFilters ? 'max-w-[100px] opacity-100 ml-2' : 'max-w-0 opacity-0 ml-0'}`}>
+                            <button
+                                onClick={clearFilters}
+                                className="flex items-center gap-2 px-3 py-2 text-muted hover:text-primary text-sm transition-colors whitespace-nowrap"
+                            >
+                                <X className="w-4 h-4" />
+                                Clear
+                            </button>
+                        </div>
                     </div>
-                )}
-
-                {uiSettings['tenants.ui.showStatusFilter'] !== false && (
-                    <select
-                        value={statusFilter}
-                        onChange={(e) => setStatusFilter(e.target.value)}
-                        className="px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
-                    >
-                        {FILTER_CONFIG.status.options.map(opt => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                    </select>
-                )}
-
-                {uiSettings['tenants.ui.showPlanFilter'] !== false && (
-                    <select
-                        value={planFilter}
-                        onChange={(e) => setPlanFilter(e.target.value)}
-                        className="px-3 py-2 bg-dark border border-border-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
-                    >
-                        {FILTER_CONFIG.plan.options.map(opt => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                    </select>
-                )}
-
-                {hasActiveFilters && (
-                    <button onClick={clearFilters} className="flex items-center gap-2 px-3 py-2 text-muted hover:text-primary text-sm">
-                        <X className="w-4 h-4" />
-                        Clear Filters
-                    </button>
-                )}
-            </div>
+                );
+            })()}
 
             {/* DataTable */}
             <DataTable
@@ -776,31 +1056,33 @@ export function TenantsPage() {
             />
 
             {/* Pagination (Config-Driven) */}
-            {(tenants.length > 0 && uiSettings['tenants.ui.showPagination'] !== false) && (
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                        <span className="text-sm text-muted">
-                            Showing {(currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, tenants.length)} of {tenants.length}
-                        </span>
-                        <select
-                            value={pageSize}
-                            onChange={(e) => { setPageSize(parseInt(e.target.value)); setCurrentPage(1); }}
-                            className="px-2 py-1 bg-dark border border-border-muted rounded text-sm"
-                        >
-                            {PAGINATION_CONFIG.pageSizeOptions.map(size => (
-                                <option key={size} value={size}>{size} / page</option>
-                            ))}
-                        </select>
+            {
+                tenants.length > 0 && uiSettings['tenants.ui.showPagination'] !== false && (
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm text-muted">
+                                Showing {(currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, tenants.length)} of {tenants.length}
+                            </span>
+                            <select
+                                value={pageSize}
+                                onChange={(e) => { setPageSize(parseInt(e.target.value)); setCurrentPage(1); }}
+                                className="px-2 py-1 bg-dark border border-border-muted rounded text-sm"
+                            >
+                                {PAGINATION_CONFIG.pageSizeOptions.map(size => (
+                                    <option key={size} value={size}>{size} / page</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="flex items-center gap-1">
+                            <button onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="px-3 py-1.5 text-sm border border-border-muted rounded-lg disabled:opacity-50 hover:bg-white/5">First</button>
+                            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1.5 text-sm border border-border-muted rounded-lg disabled:opacity-50 hover:bg-white/5">Prev</button>
+                            <span className="px-4 py-1.5 text-sm">Page {currentPage} of {totalPages || 1}</span>
+                            <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages} className="px-3 py-1.5 text-sm border border-border-muted rounded-lg disabled:opacity-50 hover:bg-white/5">Next</button>
+                            <button onClick={() => setCurrentPage(totalPages)} disabled={currentPage >= totalPages} className="px-3 py-1.5 text-sm border border-border-muted rounded-lg disabled:opacity-50 hover:bg-white/5">Last</button>
+                        </div>
                     </div>
-                    <div className="flex items-center gap-1">
-                        <button onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="px-3 py-1.5 text-sm border border-border-muted rounded-lg disabled:opacity-50 hover:bg-white/5">First</button>
-                        <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1.5 text-sm border border-border-muted rounded-lg disabled:opacity-50 hover:bg-white/5">Prev</button>
-                        <span className="px-4 py-1.5 text-sm">Page {currentPage} of {totalPages || 1}</span>
-                        <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages} className="px-3 py-1.5 text-sm border border-border-muted rounded-lg disabled:opacity-50 hover:bg-white/5">Next</button>
-                        <button onClick={() => setCurrentPage(totalPages)} disabled={currentPage >= totalPages} className="px-3 py-1.5 text-sm border border-border-muted rounded-lg disabled:opacity-50 hover:bg-white/5">Last</button>
-                    </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Drawer */}
             <RightDrawer isOpen={drawerOpen} onClose={() => setDrawerOpen(false)} title={editingTenant ? 'Edit Tenant' : 'Add Tenant'}>
@@ -809,6 +1091,18 @@ export function TenantsPage() {
 
             {/* Bulk Import Modal */}
             <BulkImportModal isOpen={bulkImportOpen} onClose={() => setBulkImportOpen(false)} onSuccess={() => { fetchTenants(); showToast('Bulk import completed', 'success'); }} />
+
+            {/* Action Confirmation Modal */}
+            <ActionConfirmModal
+                isOpen={confirmModal.isOpen}
+                onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+                onConfirm={confirmModal.onConfirm}
+                title={confirmModal.title}
+                description={confirmModal.description}
+                confirmText={confirmModal.confirmText}
+                variant={confirmModal.variant}
+                isLoading={isSaving}
+            />
         </div>
     );
 }

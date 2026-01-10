@@ -9,14 +9,14 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// .wrangler/tmp/bundle-SqFVTZ/strip-cf-connecting-ip-header.js
+// .wrangler/tmp/bundle-vC7pUC/strip-cf-connecting-ip-header.js
 function stripCfConnectingIPHeader(input, init) {
   const request = new Request(input, init);
   request.headers.delete("CF-Connecting-IP");
   return request;
 }
 var init_strip_cf_connecting_ip_header = __esm({
-  ".wrangler/tmp/bundle-SqFVTZ/strip-cf-connecting-ip-header.js"() {
+  ".wrangler/tmp/bundle-vC7pUC/strip-cf-connecting-ip-header.js"() {
     "use strict";
     __name(stripCfConnectingIPHeader, "stripCfConnectingIPHeader");
     globalThis.fetch = new Proxy(globalThis.fetch, {
@@ -3215,12 +3215,24 @@ function registerUsersRoutes(app2) {
   users.get("/", async (c) => {
     const db = c.env.DB;
     const tenantId = c.req.query("tenantId");
+    const status = c.req.query("status");
+    const search = c.req.query("search");
     try {
-      let query = `SELECT id, username, role, tenant_id, created_at FROM users`;
+      let query = `SELECT id, username, email, first_name, last_name, role, status, tenant_id, created_at FROM users WHERE 1=1`;
       const params = [];
       if (tenantId && tenantId !== "default") {
-        query += " WHERE tenant_id = ?";
+        query += " AND tenant_id = ?";
         params.push(tenantId);
+      }
+      if (status && status !== "all") {
+        query += " AND status = ?";
+        params.push(status);
+      } else {
+      }
+      if (search) {
+        query += " AND (username LIKE ? OR email LIKE ? OR first_name LIKE ? OR last_name LIKE ?)";
+        const searchTerm = `%${search}%`;
+        params.push(searchTerm, searchTerm, searchTerm, searchTerm);
       }
       query += " ORDER BY created_at DESC";
       const results = await db.prepare(query).bind(...params).all();
@@ -3325,23 +3337,32 @@ function registerUsersRoutes(app2) {
   users.delete("/:id", async (c) => {
     const db = c.env.DB;
     const id = c.req.param("id");
+    const permanent = c.req.query("permanent") === "true";
     try {
-      await db.prepare("UPDATE users SET deleted_at = ?, status = ? WHERE id = ?").bind(Math.floor(Date.now() / 1e3), "inactive", id).run();
-      return c.json({ success: true });
+      if (permanent) {
+        await db.prepare("DELETE FROM users WHERE id = ?").bind(id).run();
+      } else {
+        await db.prepare("UPDATE users SET deleted_at = ?, status = ?, updated_at = ? WHERE id = ?").bind(Math.floor(Date.now() / 1e3), "archived", Math.floor(Date.now() / 1e3), id).run();
+      }
+      return c.json({ success: true, permanent });
     } catch (error) {
       return c.json({ error: "Failed to delete user", message: error.message }, 500);
     }
   });
   users.post("/bulk-delete", async (c) => {
     const db = c.env.DB;
-    const { ids } = await c.req.json();
+    const { ids, permanent = false } = await c.req.json();
     if (!Array.isArray(ids) || ids.length === 0) {
       return c.json({ error: "IDs array is required" }, 400);
     }
     try {
       const placeholders = ids.map(() => "?").join(", ");
-      await db.prepare(`UPDATE users SET deleted_at = ?, status = ? WHERE id IN (${placeholders})`).bind(Math.floor(Date.now() / 1e3), "inactive", ...ids).run();
-      return c.json({ success: true, deleted: ids.length });
+      if (permanent) {
+        await db.prepare(`DELETE FROM users WHERE id IN (${placeholders})`).bind(...ids).run();
+      } else {
+        await db.prepare(`UPDATE users SET deleted_at = ?, status = ?, updated_at = ? WHERE id IN (${placeholders})`).bind(Math.floor(Date.now() / 1e3), "archived", Math.floor(Date.now() / 1e3), ...ids).run();
+      }
+      return c.json({ success: true, deleted: ids.length, permanent });
     } catch (error) {
       return c.json({ error: "Failed to delete users", message: error.message }, 500);
     }
@@ -3700,24 +3721,6 @@ var init_usersSettings = __esm({
           group: "Users Admin UI"
         },
         {
-          key: "users.ui.showStatusFilter",
-          label: "Show Status Filter",
-          type: "boolean",
-          description: "Show dropdown to filter by user status",
-          defaultValue: true,
-          scope: "tenant",
-          group: "Users Admin UI"
-        },
-        {
-          key: "users.ui.showRoleFilter",
-          label: "Show Role Filter",
-          type: "boolean",
-          description: "Show dropdown to filter by user role",
-          defaultValue: true,
-          scope: "tenant",
-          group: "Users Admin UI"
-        },
-        {
           key: "users.ui.showExport",
           label: "Enable Export",
           type: "boolean",
@@ -3789,7 +3792,79 @@ var init_usersSettings = __esm({
         { key: "users.ui.columns.showLastLogin", label: "Last Login", type: "boolean", defaultValue: true, scope: "tenant", group: "Users Table Columns" },
         { key: "users.ui.columns.showCreatedAt", label: "Created", type: "boolean", defaultValue: true, scope: "tenant", group: "Users Table Columns" },
         { key: "users.ui.columns.showUpdatedAt", label: "Updated", type: "boolean", defaultValue: false, scope: "tenant", group: "Users Table Columns" },
-        { key: "users.ui.columns.showCreatedBy", label: "Created By", type: "boolean", defaultValue: false, scope: "tenant", group: "Users Table Columns" }
+        { key: "users.ui.columns.showCreatedBy", label: "Created By", type: "boolean", defaultValue: false, scope: "tenant", group: "Users Table Columns" },
+        // ============================================================
+        // FILTER CONFIGURATION
+        // JSON structure for dynamic filter settings per column
+        // ============================================================
+        {
+          key: "users.ui.filterConfig",
+          label: "Filter Configuration",
+          type: "filterConfig",
+          description: "Configure which columns appear as filters and how they behave",
+          scope: "tenant",
+          group: "Users Filters",
+          defaultValue: {
+            username: {
+              enabled: false,
+              type: "text",
+              label: "Username",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            email: {
+              enabled: false,
+              type: "text",
+              label: "Email",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            fullName: {
+              enabled: false,
+              type: "text",
+              label: "Full Name",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            role: {
+              enabled: true,
+              type: "select",
+              label: "Role",
+              options: "auto",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            status: {
+              enabled: true,
+              type: "select",
+              label: "Status",
+              options: "auto",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            createdAt: {
+              enabled: false,
+              type: "date-range",
+              label: "Created Date",
+              sortOptions: ["newest", "oldest"],
+              defaultSort: "newest"
+            },
+            lastLogin: {
+              enabled: false,
+              type: "date-range",
+              label: "Last Login",
+              sortOptions: ["newest", "oldest"],
+              defaultSort: "newest"
+            },
+            createdBy: {
+              enabled: false,
+              type: "text",
+              label: "Created By",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            }
+          }
+        }
       ]
     };
   }
@@ -3925,13 +4000,27 @@ function registerTenantsRoutes(app2) {
   const tenants = new Hono2();
   tenants.get("/", async (c) => {
     const db = c.env.DB;
+    const status = c.req.query("status");
+    const search = c.req.query("search");
     try {
-      const results = await db.prepare(`
-                SELECT t.id, t.name, t.slug, t.status, td.domain
+      let query = `
+                SELECT t.id, t.name, t.slug, t.status, td.domain, t.plan_name, t.created_at
                 FROM tenants t
                 LEFT JOIN tenant_domains td ON t.id = td.tenant_id AND td.is_primary = 1
-                ORDER BY t.name ASC
-            `).all();
+                WHERE 1=1
+            `;
+      const params = [];
+      if (status && status !== "all") {
+        query += " AND t.status = ?";
+        params.push(status);
+      }
+      if (search) {
+        query += " AND (t.name LIKE ? OR t.slug LIKE ? OR td.domain LIKE ?)";
+        const searchTerm = `%${search}%`;
+        params.push(searchTerm, searchTerm, searchTerm);
+      }
+      query += " ORDER BY t.name ASC";
+      const results = await db.prepare(query).bind(...params).all();
       return c.json(results.results || []);
     } catch (error) {
       console.error("Tenants fetch error:", error);
@@ -3994,30 +4083,31 @@ function registerTenantsRoutes(app2) {
     const trialEndsAt = status === "trial" ? now + 14 * 24 * 60 * 60 : null;
     try {
       await db.prepare(`
-        INSERT INTO tenants (
-          id, name, slug, domain, status, owner_email,
-          plan_name, max_users, max_storage, max_api_calls,
-          trial_ends_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(
+                INSERT INTO tenants (
+                    id, name, slug, domain, status, owner_email, 
+                    plan_name, max_users, max_storage, trial_ends_at,
+                    created_at, updated_at, config
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
         id,
         name,
         slug,
-        domain,
+        domain || null,
         status,
-        ownerEmail,
+        ownerEmail || null,
         planName,
         maxUsers,
         maxStorage,
-        1e3,
         trialEndsAt,
-        now
+        now,
+        now,
+        JSON.stringify({})
       ).run();
       if (domain) {
         await db.prepare(`
-          INSERT INTO tenant_domains (id, tenant_id, domain, is_primary, created_at)
-          VALUES (?, ?, ?, 1, ?)
-        `).bind(crypto.randomUUID(), id, domain, now).run();
+                    INSERT INTO tenant_domains (id, tenant_id, domain, is_primary, created_at)
+                    VALUES (?, ?, ?, 1, ?)
+                `).bind(crypto.randomUUID(), id, domain, now).run();
         if (kv) {
           const manifest = await kv.get("tenant_manifest", "json") || {};
           manifest[domain] = { id, slug, name };
@@ -4042,6 +4132,7 @@ function registerTenantsRoutes(app2) {
   });
   tenants.patch("/:id", async (c) => {
     const db = c.env.DB;
+    const kv = c.env.KV;
     const id = c.req.param("id");
     const body = await c.req.json();
     const allowedFields = [
@@ -4078,11 +4169,41 @@ function registerTenantsRoutes(app2) {
     if (updates.length === 0) {
       return c.json({ error: "No fields to update" }, 400);
     }
-    updates.push("updated_at = ?");
-    params.push(Math.floor(Date.now() / 1e3));
-    params.push(id);
     try {
+      updates.push("updated_at = ?");
+      params.push(Math.floor(Date.now() / 1e3));
+      params.push(id);
       await db.prepare(`UPDATE tenants SET ${updates.join(", ")} WHERE id = ?`).bind(...params).run();
+      const newDomain = body.domain;
+      if (newDomain !== void 0) {
+        const currentDomain = await db.prepare(
+          "SELECT domain FROM tenant_domains WHERE tenant_id = ? AND is_primary = 1"
+        ).bind(id).first();
+        if (currentDomain?.domain && currentDomain.domain !== newDomain) {
+          if (kv) {
+            const manifest = await kv.get("tenant_manifest", "json") || {};
+            delete manifest[currentDomain.domain];
+            await kv.put("tenant_manifest", JSON.stringify(manifest));
+          }
+        }
+        await db.prepare(
+          "DELETE FROM tenant_domains WHERE tenant_id = ? AND is_primary = 1"
+        ).bind(id).run();
+        if (newDomain) {
+          await db.prepare(`
+                        INSERT INTO tenant_domains (id, tenant_id, domain, is_primary, created_at)
+                        VALUES (?, ?, ?, 1, ?)
+                    `).bind(crypto.randomUUID(), id, newDomain, Math.floor(Date.now() / 1e3)).run();
+          if (kv) {
+            const tenant = await db.prepare("SELECT name, slug FROM tenants WHERE id = ?").bind(id).first();
+            if (tenant) {
+              const manifest = await kv.get("tenant_manifest", "json") || {};
+              manifest[newDomain] = { id, slug: tenant.slug, name: tenant.name };
+              await kv.put("tenant_manifest", JSON.stringify(manifest));
+            }
+          }
+        }
+      }
       return c.json({ success: true });
     } catch (error) {
       return c.json({ error: "Failed to update tenant", message: error.message }, 500);
@@ -4092,16 +4213,13 @@ function registerTenantsRoutes(app2) {
     const db = c.env.DB;
     const id = c.req.param("id");
     const { reason } = await c.req.json();
+    const now = Math.floor(Date.now() / 1e3);
     try {
       await db.prepare(`
-        UPDATE tenants SET status = 'suspended', suspended_at = ?, suspended_reason = ?, updated_at = ?
-        WHERE id = ?
-      `).bind(
-        Math.floor(Date.now() / 1e3),
-        reason || "Suspended by administrator",
-        Math.floor(Date.now() / 1e3),
-        id
-      ).run();
+                UPDATE tenants 
+                SET status = 'suspended', suspended_at = ?, suspended_reason = ?, updated_at = ?
+                WHERE id = ?
+            `).bind(now, reason || "Suspended by administrator", now, id).run();
       return c.json({ success: true });
     } catch (error) {
       return c.json({ error: "Failed to suspend tenant", message: error.message }, 500);
@@ -4110,11 +4228,13 @@ function registerTenantsRoutes(app2) {
   tenants.post("/:id/reactivate", async (c) => {
     const db = c.env.DB;
     const id = c.req.param("id");
+    const now = Math.floor(Date.now() / 1e3);
     try {
       await db.prepare(`
-        UPDATE tenants SET status = 'active', suspended_at = NULL, suspended_reason = NULL, updated_at = ?
-        WHERE id = ?
-      `).bind(Math.floor(Date.now() / 1e3), id).run();
+                UPDATE tenants 
+                SET status = 'active', suspended_at = NULL, suspended_reason = NULL, updated_at = ?
+                WHERE id = ?
+            `).bind(now, id).run();
       return c.json({ success: true });
     } catch (error) {
       return c.json({ error: "Failed to reactivate tenant", message: error.message }, 500);
@@ -4122,13 +4242,34 @@ function registerTenantsRoutes(app2) {
   });
   tenants.delete("/:id", async (c) => {
     const db = c.env.DB;
+    const kv = c.env.KV;
     const id = c.req.param("id");
+    const permanent = c.req.query("permanent") === "true";
+    const now = Math.floor(Date.now() / 1e3);
     try {
-      await db.prepare(`
-        UPDATE tenants SET status = 'archived', deleted_at = ?, updated_at = ?
-        WHERE id = ?
-      `).bind(Math.floor(Date.now() / 1e3), Math.floor(Date.now() / 1e3), id).run();
-      return c.json({ success: true });
+      const domains = await db.prepare(
+        "SELECT domain FROM tenant_domains WHERE tenant_id = ?"
+      ).bind(id).all();
+      if (permanent) {
+        await db.prepare("DELETE FROM tenant_domains WHERE tenant_id = ?").bind(id).run();
+        await db.prepare("DELETE FROM tenants WHERE id = ?").bind(id).run();
+      } else {
+        await db.prepare(`
+                    UPDATE tenants 
+                    SET status = 'archived', deleted_at = ?, updated_at = ?
+                    WHERE id = ?
+                `).bind(now, now, id).run();
+      }
+      if (kv && domains.results) {
+        const manifest = await kv.get("tenant_manifest", "json") || {};
+        for (const row of domains.results) {
+          if (row.domain) {
+            delete manifest[row.domain];
+          }
+        }
+        await kv.put("tenant_manifest", JSON.stringify(manifest));
+      }
+      return c.json({ success: true, permanent });
     } catch (error) {
       return c.json({ error: "Failed to delete tenant", message: error.message }, 500);
     }
@@ -4274,24 +4415,6 @@ var init_tenantsSettings = __esm({
           group: "Admin UI"
         },
         {
-          key: "tenants.ui.showStatusFilter",
-          label: "Show Status Filter",
-          type: "boolean",
-          description: "Show dropdown to filter by tenant status",
-          defaultValue: true,
-          scope: "platform",
-          group: "Admin UI"
-        },
-        {
-          key: "tenants.ui.showPlanFilter",
-          label: "Show Plan Filter",
-          type: "boolean",
-          description: "Show dropdown to filter by plan type",
-          defaultValue: true,
-          scope: "platform",
-          group: "Admin UI"
-        },
-        {
           key: "tenants.ui.showExportCSV",
           label: "Enable CSV Export",
           type: "boolean",
@@ -4401,6 +4524,108 @@ var init_tenantsSettings = __esm({
         { key: "tenants.ui.columns.showCreatedAt", label: "Created", type: "boolean", defaultValue: true, scope: "platform", group: "Table Columns" },
         { key: "tenants.ui.columns.showUpdatedAt", label: "Updated", type: "boolean", defaultValue: false, scope: "platform", group: "Table Columns" },
         { key: "tenants.ui.columns.showCreatedBy", label: "Created By", type: "boolean", defaultValue: false, scope: "platform", group: "Table Columns" },
+        // ============================================================
+        // FILTER CONFIGURATION
+        // JSON structure for dynamic filter settings per column
+        // ============================================================
+        {
+          key: "tenants.ui.filterConfig",
+          label: "Filter Configuration",
+          type: "filterConfig",
+          description: "Configure which columns appear as filters and how they behave",
+          scope: "platform",
+          group: "Filters",
+          defaultValue: {
+            name: {
+              enabled: false,
+              type: "text",
+              label: "Name",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            slug: {
+              enabled: false,
+              type: "text",
+              label: "Slug",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            domain: {
+              enabled: false,
+              type: "text",
+              label: "Domain",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            status: {
+              enabled: true,
+              type: "select",
+              label: "Status",
+              options: "auto",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            planName: {
+              enabled: true,
+              type: "select",
+              label: "Plan",
+              options: "auto",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            ownerEmail: {
+              enabled: false,
+              type: "text",
+              label: "Owner",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            industry: {
+              enabled: false,
+              type: "select",
+              label: "Industry",
+              options: "auto",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            companySize: {
+              enabled: false,
+              type: "select",
+              label: "Company Size",
+              options: "auto",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            billingStatus: {
+              enabled: false,
+              type: "select",
+              label: "Billing Status",
+              options: "auto",
+              sortOptions: ["a-z", "z-a"],
+              defaultSort: "a-z"
+            },
+            createdAt: {
+              enabled: false,
+              type: "date-range",
+              label: "Created Date",
+              sortOptions: ["newest", "oldest"],
+              defaultSort: "newest"
+            },
+            trialEndsAt: {
+              enabled: false,
+              type: "date-range",
+              label: "Trial End Date",
+              sortOptions: ["newest", "oldest"],
+              defaultSort: "newest"
+            },
+            tags: {
+              enabled: false,
+              type: "multi-select",
+              label: "Tags",
+              options: "auto"
+            }
+          }
+        },
         // ============================================================
         // DEFAULT TENANT SETTINGS
         // ============================================================
@@ -4733,11 +4958,11 @@ var init_src8 = __esm({
   }
 });
 
-// .wrangler/tmp/bundle-SqFVTZ/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-vC7pUC/middleware-loader.entry.ts
 init_strip_cf_connecting_ip_header();
 init_modules_watch_stub();
 
-// .wrangler/tmp/bundle-SqFVTZ/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-vC7pUC/middleware-insertion-facade.js
 init_strip_cf_connecting_ip_header();
 init_modules_watch_stub();
 
@@ -5363,7 +5588,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-SqFVTZ/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-vC7pUC/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -5397,7 +5622,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-SqFVTZ/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-vC7pUC/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

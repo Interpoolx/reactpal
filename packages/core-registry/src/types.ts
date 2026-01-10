@@ -184,7 +184,7 @@ export interface SettingField {
     label: string;
 
     /** Field type */
-    type: 'text' | 'number' | 'boolean' | 'select' | 'color' | 'file' | 'json' | 'textarea' | 'button' | 'action';
+    type: 'text' | 'number' | 'boolean' | 'select' | 'color' | 'file' | 'json' | 'textarea' | 'button' | 'action' | 'filterConfig';
 
     /** Help text */
     description?: string;

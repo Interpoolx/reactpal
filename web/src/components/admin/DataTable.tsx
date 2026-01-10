@@ -18,6 +18,8 @@ interface DataTableProps<TData> {
     onEdit?: (row: TData) => void;
     onDelete?: (rows: TData[]) => void;
     isLoading?: boolean;
+    rowSelection?: RowSelectionState;
+    onRowSelectionChange?: (selection: RowSelectionState) => void;
 }
 
 // Skeleton row component for loading state
@@ -40,9 +42,14 @@ export function DataTable<TData>({
     onEdit,
     onDelete,
     isLoading = false,
+    rowSelection: controlledRowSelection,
+    onRowSelectionChange: controlledOnRowSelectionChange,
 }: DataTableProps<TData>) {
     const [sorting, setSorting] = useState<SortingState>([]);
-    const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+    const [internalRowSelection, setInternalRowSelection] = useState<RowSelectionState>({});
+
+    const rowSelection = controlledRowSelection ?? internalRowSelection;
+    const setRowSelection = controlledOnRowSelectionChange ?? setInternalRowSelection;
 
     // Check if columns already have an actions/quickActions column
     const hasCustomActions = columns.some(col =>
@@ -92,7 +99,15 @@ export function DataTable<TData>({
         columns: allColumns,
         state: { sorting, rowSelection },
         onSortingChange: setSorting,
-        onRowSelectionChange: setRowSelection,
+        onRowSelectionChange: (updater) => {
+            // Handle both function updater and value
+            if (typeof updater === 'function') {
+                const newState = updater(rowSelection);
+                setRowSelection(newState);
+            } else {
+                setRowSelection(updater);
+            }
+        },
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
         getPaginationRowModel: getPaginationRowModel(),

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ColumnDef } from '@tanstack/react-table';
+import { ColumnDef, RowSelectionState } from '@tanstack/react-table';
 import { DataTable } from './DataTable';
 import { RightDrawer } from './RightDrawer';
 import { BulkImportModal } from './BulkImportModal';
@@ -305,6 +305,9 @@ export function TenantsPage() {
         variant: 'danger'
     });
 
+    // Row selection state for DataTable
+    const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+
     // Load UI settings from database
     useEffect(() => {
         const loadSettings = async () => {
@@ -468,6 +471,7 @@ export function TenantsPage() {
                     }
                     showToast(`${permanent ? 'Permanently deleted' : 'Archived'} ${rows.length} tenant(s)`, 'success');
                     setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                    setRowSelection({}); // Clear selection
                     fetchTenants();
                 } catch (err: any) {
                     showToast(err.message || 'Action failed', 'error');
@@ -1099,6 +1103,8 @@ export function TenantsPage() {
                 onEdit={handleEdit}
                 onDelete={handleDelete}
                 isLoading={isLoading}
+                rowSelection={rowSelection}
+                onRowSelectionChange={setRowSelection}
             />
 
             {/* Pagination (Config-Driven) */}

@@ -194,23 +194,22 @@ export function BulkImportModal({ isOpen, onClose, onSuccess }: BulkImportModalP
     return (
         <AnimatePresence>
             {isOpen && (
-                <>
-                    {/* Backdrop */}
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        onClick={handleClose}
-                        className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50"
-                    />
-
+                <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    onClick={handleClose}
+                    className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6"
+                >
                     {/* Modal */}
                     <motion.div
                         initial={{ opacity: 0, scale: 0.95 }}
                         animate={{ opacity: 1, scale: 1 }}
                         exit={{ opacity: 0, scale: 0.95 }}
-                        className="fixed inset-4 md:inset-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:w-[700px] max-h-[90vh] bg-darker border border-border-muted rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full max-w-2xl bg-darker border border-border-muted rounded-2xl shadow-2xl flex flex-col overflow-hidden max-h-full sm:max-h-[85vh]"
                     >
+
                         {/* Header */}
                         <div className="flex items-center justify-between p-5 border-b border-border-muted shrink-0 bg-darker">
                             <div className="flex items-center gap-3">
@@ -400,7 +399,7 @@ export function BulkImportModal({ isOpen, onClose, onSuccess }: BulkImportModalP
                         </div>
 
                         {/* Footer Actions */}
-                        <div className="flex items-center justify-between p-5 border-t border-border-muted bg-dark/30 shrink-0">
+                        <div className="flex items-center justify-between p-5 border-t border-border-muted bg-darker shrink-0">
                             {step === 'input' && (
                                 <>
                                     <button
@@ -422,7 +421,7 @@ export function BulkImportModal({ isOpen, onClose, onSuccess }: BulkImportModalP
                                         ) : (
                                             <>
                                                 <FileText className="w-4 h-4" />
-                                                Preview Import
+                                                Next: Preview & Verify
                                             </>
                                         )}
                                     </button>
@@ -458,7 +457,7 @@ export function BulkImportModal({ isOpen, onClose, onSuccess }: BulkImportModalP
                             )}
                         </div>
                     </motion.div>
-                </>
+                </motion.div>
             )}
         </AnimatePresence>
     );

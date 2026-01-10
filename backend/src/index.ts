@@ -17,6 +17,9 @@ type Bindings = {
     DB: D1Database;
     TENANT_MANIFESTS: KVNamespace;
     ADMIN_KEY: string;
+    CLOUDFLARE_API_TOKEN?: string;
+    CLOUDFLARE_ACCOUNT_ID?: string;
+    CLOUDFLARE_DATABASE_ID?: string;
 }
 
 type Variables = {

@@ -19,6 +19,32 @@ export default function DatabaseSettings() {
     const [migrationMeta, setMigrationMeta] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
     const [recentActivity, setRecentActivity] = useState<any[]>([]);
     const [migrations, setMigrations] = useState<any[]>([]);
+    const [remoteStats, setRemoteStats] = useState<Record<string, any>>(() => {
+        try {
+            const cached = localStorage.getItem('reactpal_remote_db_stats');
+            return cached ? JSON.parse(cached) : {};
+        } catch {
+            return {};
+        }
+    });
+    const [loadingRemote, setLoadingRemote] = useState(false);
+
+    const [selectedTablesForBulk, setSelectedTablesForBulk] = useState<Set<string>>(new Set());
+    const [confirmModal, setConfirmModal] = useState<{
+        open: boolean;
+        title: string;
+        message: React.ReactNode;
+        confirmText: string;
+        type: 'danger' | 'warning' | 'info';
+        onConfirm: () => void;
+    }>({
+        open: false,
+        title: '',
+        message: '',
+        confirmText: 'Confirm',
+        type: 'info',
+        onConfirm: () => { },
+    });
 
     const tabs = [
         { id: 'overview', label: 'Overview', icon: Activity },
@@ -31,6 +57,32 @@ export default function DatabaseSettings() {
     useEffect(() => {
         fetchAllData();
     }, [tablePage, migrationPage]);
+
+    useEffect(() => {
+        // Only fetch if we have no data and we are on the tables tab
+        // If data exists in localStorage (loaded into state), we don't auto-fetch
+        if (activeTab === 'tables' && Object.keys(remoteStats).length === 0) {
+            fetchRemoteStats();
+        }
+    }, [activeTab]);
+
+    const fetchRemoteStats = async () => {
+        setLoadingRemote(true);
+        try {
+            const res = await apiFetch('/api/v1/database/tables/remote');
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success) {
+                    setRemoteStats(data.data);
+                    localStorage.setItem('reactpal_remote_db_stats', JSON.stringify(data.data));
+                }
+            }
+        } catch (e) {
+            console.error('Failed to fetch remote stats', e);
+        } finally {
+            setLoadingRemote(false);
+        }
+    };
 
     const fetchAllData = async () => {
         setLoading(true);
@@ -193,15 +245,177 @@ export default function DatabaseSettings() {
         }
     };
 
+    const toggleTableSelection = (tableName: string) => {
+        const newSelection = new Set(selectedTablesForBulk);
+        if (newSelection.has(tableName)) {
+            newSelection.delete(tableName);
+        } else {
+            newSelection.add(tableName);
+        }
+        setSelectedTablesForBulk(newSelection);
+    };
+
+    const toggleSelectAll = () => {
+        if (selectedTablesForBulk.size === tables.length) {
+            setSelectedTablesForBulk(new Set());
+        } else {
+            setSelectedTablesForBulk(new Set(tables.map(t => t.name)));
+        }
+    };
+
+    const executeBulkOp = async (operation: 'push' | 'pull', targets: string[]) => {
+        setConfirmModal((prev: any) => ({ ...prev, open: false }));
+        const endpoint = operation === 'push' ? '/api/v1/database/tables/sync-data' : '/api/v1/database/tables/pull-data';
+
+        // Process sequentially to show progress or errors clearly
+        let successCount = 0;
+        let failCount = 0;
+
+        for (const table of targets) {
+            try {
+                showToast(`${operation === 'push' ? 'Pushing' : 'Pulling'} ${table}...`, 'info');
+                const res = await apiFetch(endpoint, {
+                    method: 'POST',
+                    body: JSON.stringify({ table })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    successCount++;
+                } else {
+                    failCount++;
+                    showToast(`Failed: ${data.message}`, 'error');
+                }
+            } catch (e: any) {
+                failCount++;
+                showToast(`Error on ${table}: ${e.message}`, 'error');
+            }
+        }
+
+        if (successCount > 0) {
+            showToast(`Completed. Success: ${successCount}, Failed: ${failCount}`, 'success');
+            fetchRemoteStats();
+            fetchAllData(); // Refresh local counts too if pull
+        }
+        setSelectedTablesForBulk(new Set());
+    };
+
+    const initBulkOp = (operation: 'push' | 'pull') => {
+        const targets = Array.from(selectedTablesForBulk);
+        if (targets.length === 0) return;
+
+        setConfirmModal({
+            open: true,
+            title: `Bulk ${operation === 'push' ? 'Push to Remote' : 'Pull to Local'}`,
+            message: (
+                <div>
+                    <p>Are you sure you want to <strong>{operation}</strong> data for {targets.length} tables?</p>
+                    <ul className="list-disc list-inside mt-2 text-sm text-gray-400 max-h-32 overflow-y-auto">
+                        {targets.map(t => <li key={t}>{t}</li>)}
+                    </ul>
+                    <p className="mt-3 text-yellow-400 text-sm">
+                        {operation === 'push'
+                            ? 'This will overwrite records in the REMOTE database.'
+                            : 'This will overwrite records in the LOCAL database.'}
+                    </p>
+                </div>
+            ),
+            confirmText: `Yes, ${operation} Data`,
+            type: 'warning',
+            onConfirm: () => executeBulkOp(operation, targets),
+        });
+    };
+
+    const initSingleOp = (operation: 'push' | 'pull', table: string) => {
+        setConfirmModal({
+            open: true,
+            title: `${operation === 'push' ? 'Push to Remote' : 'Pull to Local'}`,
+            message: (
+                <div>
+                    <p>Are you sure you want to <strong>{operation}</strong> data for <strong>"{table}"</strong>?</p>
+                    <p className="mt-2 text-yellow-400 text-sm">
+                        {operation === 'push'
+                            ? 'This will overwrite matching records in the REMOTE database.'
+                            : 'This will overwrite matching records in the LOCAL database.'}
+                    </p>
+                </div>
+            ),
+            confirmText: `Yes, ${operation}`,
+            type: 'warning',
+            onConfirm: () => executeBulkOp(operation, [table]),
+        });
+    };
+
+    const ConfirmationModal = () => {
+        if (!confirmModal.open) return null;
+
+        return (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                <div className="bg-[#0f1623] border border-gray-800 rounded-xl shadow-2xl max-w-md w-full overflow-hidden">
+                    <div className="p-6">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className={`p-2 rounded-full ${confirmModal.type === 'danger' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
+                                <AlertTriangle className="w-6 h-6" />
+                            </div>
+                            <h3 className="text-xl font-bold text-white">{confirmModal.title}</h3>
+                        </div>
+                        <div className="text-gray-300 mb-6">
+                            {confirmModal.message}
+                        </div>
+                        <div className="flex justify-end gap-3">
+                            <button
+                                onClick={() => setConfirmModal((prev: any) => ({ ...prev, open: false }))}
+                                className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-300 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={confirmModal.onConfirm}
+                                className={`px-4 py-2 rounded-lg text-white font-medium transition-colors ${confirmModal.type === 'danger' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'
+                                    }`}
+                            >
+                                {confirmModal.confirmText}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     const handleCopy = (text: string) => {
         navigator.clipboard.writeText(text);
         showToast('Command copied to clipboard', 'success');
+    };
+
+    const handlePushData = async (table: string) => {
+        if (!confirm(`Are you sure you want to push all local data for "${table}" to remote? This will overwrite matching records.`)) return;
+
+        try {
+            showToast(`Syncing data for ${table}...`, 'info');
+            const res = await apiFetch('/api/v1/database/tables/sync-data', {
+                method: 'POST',
+                body: JSON.stringify({ table })
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                showToast(data.message, 'success');
+                // Refresh remote stats
+                fetchRemoteStats();
+            } else {
+                showToast(data.message, 'error');
+            }
+        } catch (e: any) {
+            showToast('Sync failed: ' + e.message, 'error');
+        }
     };
 
     const StatusBadge = ({ status }: { status: string }) => {
         const config: Record<string, any> = {
             match: { icon: CheckCircle2, color: 'text-green-400', bg: 'bg-green-500/10', label: 'Match' },
             mismatch: { icon: XCircle, color: 'text-red-400', bg: 'bg-red-500/10', label: 'Mismatch' },
+            data_mismatch: { icon: AlertTriangle, color: 'text-orange-400', bg: 'bg-orange-500/10', label: 'Data Diff' },
+            schema_mismatch: { icon: AlertTriangle, color: 'text-red-400', bg: 'bg-red-500/10', label: 'Schema Diff' },
             missing: { icon: AlertTriangle, color: 'text-orange-400', bg: 'bg-orange-500/10', label: 'Missing' },
             extra: { icon: AlertTriangle, color: 'text-yellow-400', bg: 'bg-yellow-500/10', label: 'Extra' },
             success: { icon: CheckCircle2, color: 'text-green-400', bg: 'bg-green-500/10', label: 'Success' },
@@ -218,6 +432,19 @@ export default function DatabaseSettings() {
         );
     };
 
+    const getTableStatus = (table: any) => {
+        const remote = remoteStats[table.name];
+        if (!remote) return 'pending';
+
+        const localCols = Array.isArray(table.columns) ? table.columns.length : table.columns;
+        const remoteCols = remote.columns;
+
+        if (localCols !== remoteCols) return 'schema_mismatch';
+        if (table.records !== remote.records) return 'data_mismatch';
+
+        return 'match';
+    };
+
     if (loading && !dbStatus) {
         return (
             <div className="flex items-center justify-center min-h-[400px]">
@@ -227,7 +454,9 @@ export default function DatabaseSettings() {
     }
 
     return (
-        <div className="min-h-screen bg-[#0a0e1a] text-gray-100 p-8">
+        <div className="min-h-screen bg-[#0a0e1a] text-gray-100 p-8 relative">
+            <ConfirmationModal />
+
             <div className="mb-8">
                 <div className="flex items-center gap-3 mb-2">
                     <Database className="w-8 h-8 text-blue-400" />
@@ -350,10 +579,35 @@ export default function DatabaseSettings() {
                                 <h3 className="text-lg font-semibold text-white mb-1">Database Tables</h3>
                                 <p className="text-sm text-gray-400">View and compare table structures across environments</p>
                             </div>
-                            <button className="flex items-center gap-2 px-4 py-2 bg-purple-500 hover:bg-purple-600 rounded-lg text-white font-medium transition-all">
-                                <RefreshCw className="w-4 h-4" />
-                                Refresh
-                            </button>
+                            <div className="flex items-center gap-3">
+                                {selectedTablesForBulk.size > 0 && (
+                                    <div className="flex items-center bg-blue-500/10 border border-blue-500/20 rounded-lg px-2 py-1">
+                                        <span className="text-xs text-blue-400 font-medium px-2 border-r border-blue-500/20 mr-2">
+                                            {selectedTablesForBulk.size} selected
+                                        </span>
+                                        <button
+                                            onClick={() => initBulkOp('push')}
+                                            className="p-1.5 hover:bg-blue-500/20 text-blue-400 rounded transition-colors flex items-center gap-1.5 text-xs font-medium"
+                                        >
+                                            <Upload className="w-3 h-3" /> Push
+                                        </button>
+                                        <button
+                                            onClick={() => initBulkOp('pull')}
+                                            className="p-1.5 hover:bg-blue-500/20 text-blue-400 rounded transition-colors flex items-center gap-1.5 text-xs font-medium ml-1"
+                                        >
+                                            <Download className="w-3 h-3" /> Pull
+                                        </button>
+                                    </div>
+                                )}
+                                <button
+                                    onClick={fetchRemoteStats}
+                                    disabled={loadingRemote}
+                                    className="flex items-center gap-2 px-4 py-2 bg-purple-500 hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white font-medium transition-all"
+                                >
+                                    <RefreshCw className={`w-4 h-4 ${loadingRemote ? 'animate-spin' : ''}`} />
+                                    Refresh
+                                </button>
+                            </div>
                         </div>
                     </div>
 
@@ -363,6 +617,14 @@ export default function DatabaseSettings() {
                             <table className="w-full">
                                 <thead className="bg-gray-900/50">
                                     <tr>
+                                        <th className="px-6 py-3 w-4">
+                                            <input
+                                                type="checkbox"
+                                                className="rounded border-gray-700 bg-gray-800 text-blue-500 focus:ring-blue-500/20"
+                                                checked={tables.length > 0 && selectedTablesForBulk.size === tables.length}
+                                                onChange={toggleSelectAll}
+                                            />
+                                        </th>
                                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
                                             Table Name
                                         </th>
@@ -381,6 +643,7 @@ export default function DatabaseSettings() {
                                     </tr>
                                     <tr className="border-t border-gray-800">
                                         <th className="px-6 py-2"></th>
+                                        <th className="px-6 py-2"></th>
                                         <th className="px-3 py-2 text-center text-xs font-medium text-blue-400">Records</th>
                                         <th className="px-3 py-2 text-center text-xs font-medium text-blue-400">Columns</th>
                                         <th className="px-3 py-2 text-center text-xs font-medium text-green-400">Records</th>
@@ -390,33 +653,82 @@ export default function DatabaseSettings() {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-800">
-                                    {tables.map((table: any) => (
-                                        <React.Fragment key={table.name}>
-                                            <tr
-                                                className="hover:bg-gray-900/30 transition-colors cursor-pointer"
-                                                onClick={() => setSelectedTable(selectedTable === table.name ? null : table.name)}
-                                            >
-                                                <td className="px-6 py-4">
-                                                    <div className="flex items-center gap-3">
-                                                        <Database className="w-4 h-4 text-gray-400" />
-                                                        <span className="font-medium text-white">{table.name}</span>
-                                                    </div>
-                                                </td>
-                                                <td className="px-3 py-4 text-center text-sm text-gray-300">
-                                                    {table.records.toLocaleString()}
-                                                </td>
-                                                <td className="px-3 py-4 text-center text-sm text-gray-300">
-                                                    {Array.isArray(table.columns) ? table.columns.length : table.columns}
-                                                </td>
-                                                <td className="px-3 py-4 text-center">
-                                                    <StatusBadge status="match" />
-                                                </td>
-                                                <td className="px-3 py-4 text-center">
-                                                    <ArrowRight className={`w-4 h-4 text-gray-400 transition-transform mx-auto ${selectedTable === table.name ? 'rotate-90' : ''}`} />
-                                                </td>
-                                            </tr>
-                                        </React.Fragment>
-                                    ))}
+                                    {tables
+                                        .filter((table: any) => !['d1_migrations', 'sqlite_sequence', '_cf_KV'].includes(table.name))
+                                        .map((table: any) => {
+                                            const status = getTableStatus(table);
+                                            const isSelected = selectedTablesForBulk.has(table.name);
+                                            return (
+                                                <React.Fragment key={table.name}>
+                                                    <tr
+                                                        className={`hover:bg-gray-900/30 transition-colors cursor-pointer ${isSelected ? 'bg-blue-500/5' : ''}`}
+                                                        onClick={() => setSelectedTable(selectedTable === table.name ? null : table.name)}
+                                                    >
+                                                        <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                                                            <input
+                                                                type="checkbox"
+                                                                className="rounded border-gray-700 bg-gray-800 text-blue-500 focus:ring-blue-500/20"
+                                                                checked={isSelected}
+                                                                onChange={() => toggleTableSelection(table.name)}
+                                                            />
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <div className="flex items-center gap-3">
+                                                                <Database className={`w-4 h-4 ${isSelected ? 'text-blue-400' : 'text-gray-400'}`} />
+                                                                <span className={`font-medium ${isSelected ? 'text-blue-400' : 'text-white'}`}>{table.name}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-3 py-4 text-center text-sm text-gray-300">
+                                                            {table.records.toLocaleString()}
+                                                        </td>
+                                                        <td className="px-3 py-4 text-center text-sm text-gray-300">
+                                                            {Array.isArray(table.columns) ? table.columns.length : table.columns}
+                                                        </td>
+                                                        <td className="px-3 py-4 text-center text-sm text-gray-300">
+                                                            {loadingRemote ? (
+                                                                <Loader2 className="w-3 h-3 animate-spin mx-auto text-muted" />
+                                                            ) : (
+                                                                remoteStats[table.name]?.records?.toLocaleString() || '-'
+                                                            )}
+                                                        </td>
+                                                        <td className="px-3 py-4 text-center text-sm text-gray-300">
+                                                            {loadingRemote ? (
+                                                                <Loader2 className="w-3 h-3 animate-spin mx-auto text-muted" />
+                                                            ) : (
+                                                                remoteStats[table.name]?.columns || '-'
+                                                            )}
+                                                        </td>
+                                                        <td className="px-3 py-4 text-center">
+                                                            <StatusBadge status={status} />
+                                                        </td>
+                                                        <td className="px-3 py-4 text-center">
+                                                            <div className="flex items-center justify-end gap-2">
+                                                                {(status === 'data_mismatch' || status === 'missing') && (
+                                                                    <button
+                                                                        onClick={(e) => { e.stopPropagation(); initSingleOp('push', table.name); }}
+                                                                        className="p-1.5 hover:bg-blue-500/20 text-blue-400 rounded transition-colors"
+                                                                        title="Push local data to remote"
+                                                                    >
+                                                                        <Upload className="w-4 h-4" />
+                                                                    </button>
+                                                                )}
+                                                                {/* Add Pull button for easy access */}
+                                                                {remoteStats[table.name]?.records > 0 && (
+                                                                    <button
+                                                                        onClick={(e) => { e.stopPropagation(); initSingleOp('pull', table.name); }}
+                                                                        className="p-1.5 hover:bg-purple-500/20 text-purple-400 rounded transition-colors"
+                                                                        title="Pull remote data to local"
+                                                                    >
+                                                                        <Download className="w-4 h-4" />
+                                                                    </button>
+                                                                )}
+                                                                <ArrowRight className={`w-4 h-4 text-gray-400 transition-transform ${selectedTable === table.name ? 'rotate-90' : ''}`} />
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                </React.Fragment>
+                                            );
+                                        })}
                                 </tbody>
                             </table>
                         </div>
@@ -434,247 +746,253 @@ export default function DatabaseSettings() {
                             >
                                 Previous
                             </button>
-                            <button
-                                onClick={() => setTablePage(p => Math.min(tableMeta.totalPages, p + 1))}
-                                disabled={tablePage === tableMeta.totalPages}
-                                className="px-3 py-1 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded text-sm transition-colors"
-                            >
-                                Next
-                            </button>
                         </div>
+                        <button
+                            onClick={() => setTablePage(p => Math.min(tableMeta.totalPages, p + 1))}
+                            disabled={tablePage === tableMeta.totalPages}
+                            className="px-3 py-1 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded text-sm transition-colors"
+                        >
+                            Next
+                        </button>
                     </div>
                 </div>
             )}
 
             {/* Schema Tab */}
-            {activeTab === 'schema' && (
-                <div className="space-y-6">
-                    {/* Schema Actions */}
-                    <div className="bg-gradient-to-br from-gray-900/50 to-gray-800/30 backdrop-blur-sm border border-gray-800 rounded-lg p-6">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <h3 className="text-lg font-semibold text-white mb-1">Schema Comparison</h3>
-                                <p className="text-sm text-gray-400">Compare local schema definitions with remote database</p>
+            {
+                activeTab === 'schema' && (
+                    <div className="space-y-6">
+                        {/* Schema Actions */}
+                        <div className="bg-gradient-to-br from-gray-900/50 to-gray-800/30 backdrop-blur-sm border border-gray-800 rounded-lg p-6">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <h3 className="text-lg font-semibold text-white mb-1">Schema Comparison</h3>
+                                    <p className="text-sm text-gray-400">Compare local schema definitions with remote database</p>
+                                </div>
+                                <button className="flex items-center gap-2 px-4 py-2 bg-purple-500 hover:bg-purple-600 rounded-lg text-white font-medium transition-all">
+                                    <RefreshCw className="w-4 h-4" />
+                                    Refresh Comparison
+                                </button>
                             </div>
-                            <button className="flex items-center gap-2 px-4 py-2 bg-purple-500 hover:bg-purple-600 rounded-lg text-white font-medium transition-all">
-                                <RefreshCw className="w-4 h-4" />
-                                Refresh Comparison
-                            </button>
                         </div>
-                    </div>
 
-                    {/* Schema Comparison Table */}
-                    <div className="space-y-4">
-                        {schemaDiff.length === 0 ? (
-                            <div className="text-center py-12 bg-gradient-to-br from-gray-900/50 to-gray-800/30 backdrop-blur-sm border border-gray-800 rounded-lg">
-                                <GitCompare className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-                                <h3 className="text-lg font-medium text-gray-300">No Schema Differences</h3>
-                                <p className="text-gray-500">Your local schema matches the remote database.</p>
-                            </div>
-                        ) : (
-                            schemaDiff.map((table: any) => (
-                                <div
-                                    key={table.table}
-                                    className="bg-gradient-to-br from-gray-900/50 to-gray-800/30 backdrop-blur-sm border border-gray-800 rounded-lg overflow-hidden"
-                                >
+                        {/* Schema Comparison Table */}
+                        <div className="space-y-4">
+                            {schemaDiff.length === 0 ? (
+                                <div className="text-center py-12 bg-gradient-to-br from-gray-900/50 to-gray-800/30 backdrop-blur-sm border border-gray-800 rounded-lg">
+                                    <GitCompare className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+                                    <h3 className="text-lg font-medium text-gray-300">No Schema Differences</h3>
+                                    <p className="text-gray-500">Your local schema matches the remote database.</p>
+                                </div>
+                            ) : (
+                                schemaDiff.map((table: any) => (
                                     <div
-                                        className="p-4 cursor-pointer hover:bg-gray-900/30 transition-colors"
-                                        onClick={() => setSelectedTable(selectedTable === table.table ? null : table.table)}
+                                        key={table.table}
+                                        className="bg-gradient-to-br from-gray-900/50 to-gray-800/30 backdrop-blur-sm border border-gray-800 rounded-lg overflow-hidden"
                                     >
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-3">
-                                                <Database className="w-5 h-5 text-gray-400" />
-                                                <span className="font-semibold text-white">{table.table}</span>
-                                                <StatusBadge status={table.status} />
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                {table.status !== 'match' && (
-                                                    <div className="flex gap-2">
-                                                        <button
-                                                            onClick={(e) => { e.stopPropagation(); handleSchemaSync(table.table); }}
-                                                            className="px-3 py-1 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 rounded text-sm text-blue-400 transition-all"
-                                                        >
-                                                            Push
-                                                        </button>
-                                                    </div>
-                                                )}
-                                                <ArrowRight className={`w-4 h-4 text-gray-400 transition-transform ${selectedTable === table.table ? 'rotate-90' : ''}`} />
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {selectedTable === table.table && (
-                                        <div className="border-t border-gray-800 p-4 bg-gray-900/20">
-                                            <div className="overflow-x-auto">
-                                                <table className="w-full text-sm">
-                                                    <thead className="bg-gray-800/50 text-gray-400 text-xs uppercase">
-                                                        <tr>
-                                                            <th className="px-4 py-2 text-left">Column</th>
-                                                            <th className="px-4 py-2 text-left">Type</th>
-                                                            <th className="px-4 py-2 text-center">Local</th>
-                                                            <th className="px-4 py-2 text-center">Remote</th>
-                                                            <th className="px-4 py-2 text-center">Status</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody className="divide-y divide-gray-800">
-                                                        {table.columns.map((col: any) => (
-                                                            <tr key={col.name} className="hover:bg-gray-800/30">
-                                                                <td className="px-4 py-2 font-mono">{col.name}</td>
-                                                                <td className="px-4 py-2 text-gray-400">{col.type}</td>
-                                                                <td className="px-4 py-2 text-center">
-                                                                    {col.local ? <CheckCircle2 className="w-4 h-4 text-blue-400 mx-auto" /> : <XCircle className="w-4 h-4 text-gray-600 mx-auto" />}
-                                                                </td>
-                                                                <td className="px-4 py-2 text-center">
-                                                                    {col.remote ? <CheckCircle2 className="w-4 h-4 text-green-400 mx-auto" /> : <XCircle className="w-4 h-4 text-gray-600 mx-auto" />}
-                                                                </td>
-                                                                <td className="px-4 py-2 text-center">
-                                                                    {col.match ? <span className="text-green-400">Synced</span> : <span className="text-yellow-400">Mismatch</span>}
-                                                                </td>
-                                                            </tr>
-                                                        ))}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            ))
-                        )}
-                    </div>
-                </div>
-            )}
-
-            {/* Migrations Tab */}
-            {activeTab === 'migrations' && (
-                <div className="space-y-6">
-                    {/* Migration Actions */}
-                    <div className="bg-gradient-to-br from-gray-900/50 to-gray-800/30 backdrop-blur-sm border border-gray-800 rounded-lg p-6">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <h3 className="text-lg font-semibold text-white mb-1">Database Migrations</h3>
-                                <p className="text-sm text-gray-400">Track and apply database migrations</p>
-                                <div className="mt-2 text-xs text-yellow-500/80 bg-yellow-500/10 px-2 py-1 rounded inline-block border border-yellow-500/20">
-                                    <span className="font-semibold">Note:</span> Applying migrations here marks them as resolved in the dashboard. Ensure DDL has been executed.
-                                </div>
-                            </div>
-                            <button className="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 rounded-lg text-white font-medium transition-all">
-                                <Play className="w-4 h-4" />
-                                Run Pending Migrations
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* Migrations List */}
-                    <div className="bg-gradient-to-br from-gray-900/50 to-gray-800/30 backdrop-blur-sm border border-gray-800 rounded-lg overflow-hidden">
-                        <div className="overflow-x-auto">
-                            <table className="w-full">
-                                <thead className="bg-gray-900/50">
-                                    <tr>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Migration</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Status</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Applied At</th>
-                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-800">
-                                    {(migrations.length === 0) ? (
-                                        <tr>
-                                            <td colSpan={4} className="px-6 py-8 text-center text-gray-500">
-                                                No applied migrations found in the database.
-                                            </td>
-                                        </tr>
-                                    ) : (
-                                        migrations.map((migration: any) => (
-                                            <tr key={migration.id} className="hover:bg-gray-900/30 transition-colors">
-                                                <td className="px-6 py-4 text-sm font-mono text-gray-300">{migration.name}</td>
-                                                <td className="px-6 py-4">
-                                                    <StatusBadge status={migration.status} />
-                                                </td>
-                                                <td className="px-6 py-4 text-sm text-gray-400">
-                                                    {migration.appliedAt ? new Date(migration.appliedAt).toLocaleString() : '-'}
-                                                </td>
-                                                <td className="px-6 py-4 text-right">
-                                                    {migration.status === 'pending' ? (
-                                                        <button
-                                                            onClick={() => handleMigrationApply(migration.name)}
-                                                            className="px-3 py-1 bg-green-500/10 hover:bg-green-500/20 border border-green-500/30 rounded text-sm text-green-400 transition-all"
-                                                        >
-                                                            Apply
-                                                        </button>
-                                                    ) : (
-                                                        <div className="flex gap-2 justify-end">
-                                                            <span className="text-xs text-gray-500 py-1">Applied</span>
-                                                            {/* Only allow rollback of the MOST RECENT applied migration on the first page */}
-                                                            {migrationPage === 1 && migration.id === migrations[0]?.id && (
-                                                                <button
-                                                                    onClick={handleRollback}
-                                                                    className="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded text-sm text-red-400 transition-all"
-                                                                >
-                                                                    Rollback
-                                                                </button>
-                                                            )}
+                                        <div
+                                            className="p-4 cursor-pointer hover:bg-gray-900/30 transition-colors"
+                                            onClick={() => setSelectedTable(selectedTable === table.table ? null : table.table)}
+                                        >
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-3">
+                                                    <Database className="w-5 h-5 text-gray-400" />
+                                                    <span className="font-semibold text-white">{table.table}</span>
+                                                    <StatusBadge status={table.status} />
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    {table.status !== 'match' && (
+                                                        <div className="flex gap-2">
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); handleSchemaSync(table.table); }}
+                                                                className="px-3 py-1 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 rounded text-sm text-blue-400 transition-all"
+                                                            >
+                                                                Push
+                                                            </button>
                                                         </div>
                                                     )}
+                                                    <ArrowRight className={`w-4 h-4 text-gray-400 transition-transform ${selectedTable === table.table ? 'rotate-90' : ''}`} />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {selectedTable === table.table && (
+                                            <div className="border-t border-gray-800 p-4 bg-gray-900/20">
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full text-sm">
+                                                        <thead className="bg-gray-800/50 text-gray-400 text-xs uppercase">
+                                                            <tr>
+                                                                <th className="px-4 py-2 text-left">Column</th>
+                                                                <th className="px-4 py-2 text-left">Type</th>
+                                                                <th className="px-4 py-2 text-center">Local</th>
+                                                                <th className="px-4 py-2 text-center">Remote</th>
+                                                                <th className="px-4 py-2 text-center">Status</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-gray-800">
+                                                            {table.columns.map((col: any) => (
+                                                                <tr key={col.name} className="hover:bg-gray-800/30">
+                                                                    <td className="px-4 py-2 font-mono">{col.name}</td>
+                                                                    <td className="px-4 py-2 text-gray-400">{col.type}</td>
+                                                                    <td className="px-4 py-2 text-center">
+                                                                        {col.local ? <CheckCircle2 className="w-4 h-4 text-blue-400 mx-auto" /> : <XCircle className="w-4 h-4 text-gray-600 mx-auto" />}
+                                                                    </td>
+                                                                    <td className="px-4 py-2 text-center">
+                                                                        {col.remote ? <CheckCircle2 className="w-4 h-4 text-green-400 mx-auto" /> : <XCircle className="w-4 h-4 text-gray-600 mx-auto" />}
+                                                                    </td>
+                                                                    <td className="px-4 py-2 text-center">
+                                                                        {col.match ? <span className="text-green-400">Synced</span> : <span className="text-yellow-400">Mismatch</span>}
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                )
+            }
+
+            {/* Migrations Tab */}
+            {
+                activeTab === 'migrations' && (
+                    <div className="space-y-6">
+                        {/* Migration Actions */}
+                        <div className="bg-gradient-to-br from-gray-900/50 to-gray-800/30 backdrop-blur-sm border border-gray-800 rounded-lg p-6">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <h3 className="text-lg font-semibold text-white mb-1">Database Migrations</h3>
+                                    <p className="text-sm text-gray-400">Track and apply database migrations</p>
+                                    <div className="mt-2 text-xs text-yellow-500/80 bg-yellow-500/10 px-2 py-1 rounded inline-block border border-yellow-500/20">
+                                        <span className="font-semibold">Note:</span> Applying migrations here marks them as resolved in the dashboard. Ensure DDL has been executed.
+                                    </div>
+                                </div>
+                                <button className="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 rounded-lg text-white font-medium transition-all">
+                                    <Play className="w-4 h-4" />
+                                    Run Pending Migrations
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Migrations List */}
+                        <div className="bg-gradient-to-br from-gray-900/50 to-gray-800/30 backdrop-blur-sm border border-gray-800 rounded-lg overflow-hidden">
+                            <div className="overflow-x-auto">
+                                <table className="w-full">
+                                    <thead className="bg-gray-900/50">
+                                        <tr>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Migration</th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Status</th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Applied At</th>
+                                            <th className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-800">
+                                        {(migrations.length === 0) ? (
+                                            <tr>
+                                                <td colSpan={4} className="px-6 py-8 text-center text-gray-500">
+                                                    No applied migrations found in the database.
                                                 </td>
                                             </tr>
-                                        ))
-                                    )}
-                                </tbody>
-                            </table>
+                                        ) : (
+                                            migrations.map((migration: any) => (
+                                                <tr key={migration.id} className="hover:bg-gray-900/30 transition-colors">
+                                                    <td className="px-6 py-4 text-sm font-mono text-gray-300">{migration.name}</td>
+                                                    <td className="px-6 py-4">
+                                                        <StatusBadge status={migration.status} />
+                                                    </td>
+                                                    <td className="px-6 py-4 text-sm text-gray-400">
+                                                        {migration.appliedAt ? new Date(migration.appliedAt).toLocaleString() : '-'}
+                                                    </td>
+                                                    <td className="px-6 py-4 text-right">
+                                                        {migration.status === 'pending' ? (
+                                                            <button
+                                                                onClick={() => handleMigrationApply(migration.name)}
+                                                                className="px-3 py-1 bg-green-500/10 hover:bg-green-500/20 border border-green-500/30 rounded text-sm text-green-400 transition-all"
+                                                            >
+                                                                Apply
+                                                            </button>
+                                                        ) : (
+                                                            <div className="flex gap-2 justify-end">
+                                                                <span className="text-xs text-gray-500 py-1">Applied</span>
+                                                                {/* Only allow rollback of the MOST RECENT applied migration on the first page */}
+                                                                {migrationPage === 1 && migration.id === migrations[0]?.id && (
+                                                                    <button
+                                                                        onClick={handleRollback}
+                                                                        className="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded text-sm text-red-400 transition-all"
+                                                                    >
+                                                                        Rollback
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        {/* Pagination Controls */}
+                        <div className="flex items-center justify-between pt-4 border-t border-gray-800">
+                            <div className="text-sm text-gray-400">
+                                Showing page {migrationMeta.page} of {migrationMeta.totalPages} ({migrationMeta.total} total)
+                            </div>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setMigrationPage(p => Math.max(1, p - 1))}
+                                    disabled={migrationPage === 1}
+                                    className="px-3 py-1 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded text-sm transition-colors"
+                                >
+                                    Previous
+                                </button>
+                                <button
+                                    onClick={() => setMigrationPage(p => Math.min(migrationMeta.totalPages, p + 1))}
+                                    disabled={migrationPage === migrationMeta.totalPages}
+                                    className="px-3 py-1 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded text-sm transition-colors"
+                                >
+                                    Next
+                                </button>
+                            </div>
                         </div>
                     </div>
-                    {/* Pagination Controls */}
-                    <div className="flex items-center justify-between pt-4 border-t border-gray-800">
-                        <div className="text-sm text-gray-400">
-                            Showing page {migrationMeta.page} of {migrationMeta.totalPages} ({migrationMeta.total} total)
-                        </div>
-                        <div className="flex gap-2">
-                            <button
-                                onClick={() => setMigrationPage(p => Math.max(1, p - 1))}
-                                disabled={migrationPage === 1}
-                                className="px-3 py-1 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded text-sm transition-colors"
-                            >
-                                Previous
-                            </button>
-                            <button
-                                onClick={() => setMigrationPage(p => Math.min(migrationMeta.totalPages, p + 1))}
-                                disabled={migrationPage === migrationMeta.totalPages}
-                                className="px-3 py-1 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded text-sm transition-colors"
-                            >
-                                Next
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Advanced Tab */}
-            {activeTab === 'advanced' && (
-                <div className="space-y-6">
-                    <div className="bg-gradient-to-br from-gray-900/50 to-gray-800/30 backdrop-blur-sm border border-gray-800 rounded-lg p-6">
-                        <h3 className="text-lg font-semibold text-white mb-4">Advanced Settings</h3>
-                        <div className="space-y-4">
-                            <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-                                <div className="flex items-start gap-3">
-                                    <AlertTriangle className="w-5 h-5 text-yellow-400 mt-0.5" />
-                                    <div>
-                                        <h4 className="font-medium text-yellow-400 mb-1">Danger Zone</h4>
-                                        <p className="text-sm text-gray-400 mb-3">These actions are irreversible. Proceed with caution.</p>
-                                        <div className="flex gap-2">
-                                            <button className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg text-red-400 font-medium transition-all">
-                                                Reset Database
-                                            </button>
-                                            <button className="px-4 py-2 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 rounded-lg text-orange-400 font-medium transition-all">
-                                                Clear All Data
-                                            </button>
+            {
+                activeTab === 'advanced' && (
+                    <div className="space-y-6">
+                        <div className="bg-gradient-to-br from-gray-900/50 to-gray-800/30 backdrop-blur-sm border border-gray-800 rounded-lg p-6">
+                            <h3 className="text-lg font-semibold text-white mb-4">Advanced Settings</h3>
+                            <div className="space-y-4">
+                                <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                                    <div className="flex items-start gap-3">
+                                        <AlertTriangle className="w-5 h-5 text-yellow-400 mt-0.5" />
+                                        <div>
+                                            <h4 className="font-medium text-yellow-400 mb-1">Danger Zone</h4>
+                                            <p className="text-sm text-gray-400 mb-3">These actions are irreversible. Proceed with caution.</p>
+                                            <div className="flex gap-2">
+                                                <button className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg text-red-400 font-medium transition-all">
+                                                    Reset Database
+                                                </button>
+                                                <button className="px-4 py-2 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 rounded-lg text-orange-400 font-medium transition-all">
+                                                    Clear All Data
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Table Detail Drawer */}
             <div className={`fixed inset-y-0 right-0 w-[400px] bg-[#0f1623] border-l border-gray-800 shadow-2xl transform transition-transform duration-300 ease-in-out z-50 ${selectedTable && activeTab === 'tables' ? 'translate-x-0' : 'translate-x-full'}`}>
@@ -790,6 +1108,6 @@ export default function DatabaseSettings() {
                     * Run these commands from the project root for automatic D1 database resolution.
                 </p>
             </div>
-        </div>
+        </div >
     );
 }

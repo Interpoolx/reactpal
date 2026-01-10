@@ -55,7 +55,7 @@ database.get('/status', async (c) => {
 
     try {
         // Table count & Total Records
-        const tablesResult = await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__drizzle_%'").all();
+        const tablesResult = await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__drizzle_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%'").all();
         const tables = tablesResult.results || [];
         const tableCount = tables.length;
 
@@ -102,11 +102,11 @@ database.get('/tables', async (c) => {
         const limit = parseInt(c.req.query('limit') || '10');
         const offset = (page - 1) * limit;
 
-        const tablesResult = await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__drizzle_%' LIMIT ? OFFSET ?")
+        const tablesResult = await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__drizzle_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%' LIMIT ? OFFSET ?")
             .bind(limit, offset)
             .all();
 
-        const countResult = await db.prepare("SELECT count(*) as total FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__drizzle_%'").first();
+        const countResult = await db.prepare("SELECT count(*) as total FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__drizzle_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%'").first();
         const total = (countResult as any)?.total || 0;
 
         const tableNames = (tablesResult.results || []).map((r: any) => r.name);
@@ -150,6 +150,256 @@ database.get('/tables', async (c) => {
     } catch (error: any) {
         console.error('Database tables error:', error);
         return c.json({ error: 'Failed to fetch tables', message: error.message }, 500);
+    }
+});
+
+
+/**
+ * GET /api/v1/database/tables/remote
+ * Get remote table stats via CLI
+ * NOTE: This requires CLOUDFLARE_API_TOKEN to be set in production/workers.
+ * CLI execution is not possible in Worker runtime.
+ */
+// Helper to query D1 via HTTP API
+interface CloudflareD1Response {
+    result: {
+        meta: {
+            changed_db: boolean;
+            changes: number;
+            duration: number;
+            last_row_id: number;
+            rows_read: number;
+            rows_written: number;
+            size_after: number;
+        };
+        results: any[];
+        success: boolean;
+    }[];
+    success: boolean;
+    errors: any[];
+    messages: any[];
+}
+
+async function queryD1(accountId: string, databaseId: string, token: string, sql: string): Promise<any[]> {
+    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`;
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ sql })
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Cloudflare API Error: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+
+    const json = (await response.json()) as CloudflareD1Response;
+
+    if (!json.success || !json.result || json.result.length === 0) {
+        if (json.errors && json.errors.length > 0) {
+            throw new Error(`D1 Query Error: ${JSON.stringify(json.errors)}`);
+        }
+        return [];
+    }
+
+    return json.result[0].results || [];
+}
+
+/**
+ * GET /api/v1/database/tables/remote
+ * Get remote table stats via Cloudflare D1 HTTP API
+ */
+database.get('/tables/remote', async (c) => {
+    const accountId = c.env.CLOUDFLARE_ACCOUNT_ID;
+    const token = c.env.CLOUDFLARE_API_TOKEN;
+    // Fallback to the ID from wrangler.toml if env var is missing
+    const databaseId = c.env.CLOUDFLARE_DATABASE_ID || '39a4d54d-a335-4e15-bb6b-b02362fa16ea';
+
+    if (!accountId || !token) {
+        return c.json({
+            success: false,
+            message: 'Remote stats require CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID environment variables.'
+        });
+    }
+
+    try {
+        // 1. Get Table Names
+        const tables = await queryD1(accountId, databaseId, token, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__drizzle_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%'");
+        const tableNames = tables.map((t: any) => t.name);
+
+        if (tableNames.length === 0) {
+            return c.json({ success: true, data: {} });
+        }
+
+        // 2. Construct UNION ALL query for counts
+        // Batch queries to avoid "too many terms in compound SELECT" error
+        // SQLite limit is often 500, but Cloudflare D1 might be stricter or query length limits apply.
+        // A safe batch size is 5-10.
+        const BATCH_SIZE = 5;
+        const result: Record<string, any> = {};
+
+        for (let i = 0; i < tableNames.length; i += BATCH_SIZE) {
+            const batch = tableNames.slice(i, i + BATCH_SIZE);
+
+            const countQueries = batch.map((name: string) => {
+                const escapedName = name.replace(/'/g, "''");
+                const identifier = `"${name.replace(/"/g, '""')}"`;
+                return `SELECT '${escapedName}' as name, count(*) as count, (SELECT count(*) FROM pragma_table_info('${escapedName}')) as columns FROM ${identifier}`;
+            });
+
+            const fullQuery = countQueries.join(' UNION ALL ');
+
+            try {
+                console.log(`[RemoteStats] Querying batch ${i}:`, batch);
+                const stats = await queryD1(accountId, databaseId, token, fullQuery);
+                stats.forEach((s: any) => {
+                    result[s.name] = { records: s.count, columns: s.columns };
+                });
+            } catch (batchError: any) {
+                console.error(`[RemoteStats] Failed batch ${i}-${i + BATCH_SIZE}:`, batchError.message || batchError);
+                if (batchError.message?.includes('SQLITE_AUTH')) {
+                    console.error('[RemoteStats] SQLITE_AUTH error suggests one of these tables is restricted:', batch);
+                }
+                // Continue with other batches even if one fails
+            }
+        }
+
+        return c.json({ success: true, data: result });
+
+    } catch (e: any) {
+        console.error('Remote stats error:', e);
+        return c.json({ success: false, message: e.message }, 500);
+    }
+});
+
+/**
+ * POST /api/v1/database/tables/sync-data
+ * Push local table data to remote D1
+ */
+database.post('/tables/sync-data', async (c) => {
+    const accountId = c.env.CLOUDFLARE_ACCOUNT_ID;
+    const token = c.env.CLOUDFLARE_API_TOKEN;
+    const databaseId = c.env.CLOUDFLARE_DATABASE_ID || '39a4d54d-a335-4e15-bb6b-b02362fa16ea';
+    const db = c.env.DB;
+
+    const { table } = await c.req.json();
+
+    if (!accountId || !token) {
+        return c.json({ success: false, message: 'Missing Cloudflare credentials.' }, 400);
+    }
+
+    try {
+        // 1. Get local data
+        const dataResult = await db.prepare(`SELECT * FROM ${table}`).all();
+        const rows = dataResult.results || [];
+
+        if (rows.length === 0) {
+            return c.json({ success: true, message: 'No data to sync.' });
+        }
+
+        // 2. Prepare batches
+        const BATCH_SIZE = 20; // 20 rows per batch
+        let successCount = 0;
+
+        for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+            const batch = rows.slice(i, i + BATCH_SIZE);
+            const statements: string[] = [];
+
+            for (const row of batch) {
+                const columns = Object.keys(row);
+                // Simple escaping for common types
+                const values = Object.values(row).map(v => {
+                    if (v === null) return 'NULL';
+                    if (typeof v === 'string') return `'${v.replace(/'/g, "''")}'`;
+                    if (typeof v === 'boolean') return v ? 1 : 0;
+                    if (v instanceof Date) return `'${v.toISOString()}'`;
+                    return v;
+                });
+
+                statements.push(`INSERT OR REPLACE INTO "${table}" (${columns.join(', ')}) VALUES (${values.join(', ')})`);
+            }
+
+            // Execute batch via Cloudflare API
+            // Cloudflare D1 HTTP API supports multiple statements separated by newlines/semicolons or as an array of queries if using the specific batch endpoint.
+            // But queryD1 helper uses /query which takes a single SQL string. We can combine with semicolons.
+            const fullSql = statements.join('; ');
+            await queryD1(accountId, databaseId, token, fullSql);
+            successCount += batch.length;
+        }
+
+        await logAudit(db, 'DATA_SYNC', { table, rows: successCount });
+
+        return c.json({
+            success: true,
+            message: `Successfully synced ${successCount} records to remote.`
+        });
+
+    } catch (e: any) {
+        console.error('Data sync error:', e);
+        return c.json({ success: false, message: e.message }, 500);
+    }
+});
+
+/**
+ * POST /api/v1/database/tables/pull-data
+ * Pull remote D1 data to local
+ */
+database.post('/tables/pull-data', async (c) => {
+    const accountId = c.env.CLOUDFLARE_ACCOUNT_ID;
+    const token = c.env.CLOUDFLARE_API_TOKEN;
+    const databaseId = c.env.CLOUDFLARE_DATABASE_ID || '39a4d54d-a335-4e15-bb6b-b02362fa16ea';
+    const db = c.env.DB;
+
+    const { table } = await c.req.json();
+
+    if (!accountId || !token) {
+        return c.json({ success: false, message: 'Missing Cloudflare credentials.' }, 400);
+    }
+
+    try {
+        // 1. Get remote data
+        const rows = await queryD1(accountId, databaseId, token, `SELECT * FROM "${table}"`);
+
+        if (rows.length === 0) {
+            return c.json({ success: true, message: 'No data on remote to sync.' });
+        }
+
+        // 2. Insert into local
+        // We handle batching manually for safety
+        const BATCH_SIZE = 50;
+        let successCount = 0;
+        const statements: any[] = [];
+
+        for (const row of rows) {
+            const columns = Object.keys(row);
+            const placeholders = columns.map(() => '?').join(', ');
+            const values = Object.values(row);
+
+            statements.push(
+                db.prepare(`INSERT OR REPLACE INTO "${table}" (${columns.join(', ')}) VALUES (${placeholders})`).bind(...values)
+            );
+        }
+
+        // Execute in chunks
+        for (let i = 0; i < statements.length; i += BATCH_SIZE) {
+            const chunk = statements.slice(i, i + BATCH_SIZE);
+            await db.batch(chunk);
+            successCount += chunk.length;
+        }
+
+        await logAudit(db, 'DATA_PULL', { table, rows: successCount });
+
+        return c.json({
+            success: true,
+            message: `Successfully pulled ${successCount} records from remote.`
+        });
+
+    } catch (e: any) {
+        console.error('Data pull error:', e);
+        return c.json({ success: false, message: e.message }, 500);
     }
 });
 
@@ -246,7 +496,7 @@ database.get('/export', async (c) => {
 
         // Get all tables
         const tablesResult = await db.prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__drizzle_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%'"
         ).all();
 
         const tables = tablesResult.results || [];

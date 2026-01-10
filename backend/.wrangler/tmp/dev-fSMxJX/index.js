@@ -17,14 +17,14 @@ var __publicField = (obj, key, value) => {
   return value;
 };
 
-// .wrangler/tmp/bundle-pYclVM/strip-cf-connecting-ip-header.js
+// .wrangler/tmp/bundle-lHjXsd/strip-cf-connecting-ip-header.js
 function stripCfConnectingIPHeader(input, init) {
   const request = new Request(input, init);
   request.headers.delete("CF-Connecting-IP");
   return request;
 }
 var init_strip_cf_connecting_ip_header = __esm({
-  ".wrangler/tmp/bundle-pYclVM/strip-cf-connecting-ip-header.js"() {
+  ".wrangler/tmp/bundle-lHjXsd/strip-cf-connecting-ip-header.js"() {
     "use strict";
     __name(stripCfConnectingIPHeader, "stripCfConnectingIPHeader");
     globalThis.fetch = new Proxy(globalThis.fetch, {
@@ -4369,52 +4369,6 @@ var init_fs2 = __esm({
   }
 });
 
-// ../node_modules/unenv/dist/runtime/node/child_process.mjs
-var child_process_exports = {};
-__export(child_process_exports, {
-  ChildProcess: () => ChildProcess,
-  _forkChild: () => _forkChild,
-  default: () => child_process_default,
-  exec: () => exec,
-  execFile: () => execFile,
-  execFileSync: () => execFileSync,
-  execSync: () => execSync,
-  fork: () => fork,
-  spawn: () => spawn,
-  spawnSync: () => spawnSync
-});
-var ChildProcess, _forkChild, exec, execFile, execFileSync, execSync, fork, spawn, spawnSync, child_process_default;
-var init_child_process = __esm({
-  "../node_modules/unenv/dist/runtime/node/child_process.mjs"() {
-    init_strip_cf_connecting_ip_header();
-    init_modules_watch_stub();
-    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
-    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
-    init_performance2();
-    init_utils();
-    ChildProcess = /* @__PURE__ */ notImplementedClass("child_process.ChildProcess");
-    _forkChild = /* @__PURE__ */ notImplemented("child_process.ChildProcess");
-    exec = /* @__PURE__ */ notImplemented("child_process.exec");
-    execFile = /* @__PURE__ */ notImplemented("child_process.execFile");
-    execFileSync = /* @__PURE__ */ notImplemented("child_process.execFileSync");
-    execSync = /* @__PURE__ */ notImplemented("child_process.execSyn");
-    fork = /* @__PURE__ */ notImplemented("child_process.fork");
-    spawn = /* @__PURE__ */ notImplemented("child_process.spawn");
-    spawnSync = /* @__PURE__ */ notImplemented("child_process.spawnSync");
-    child_process_default = {
-      ChildProcess,
-      _forkChild,
-      exec,
-      execFile,
-      execFileSync,
-      execSync,
-      fork,
-      spawn,
-      spawnSync
-    };
-  }
-});
-
 // ../packages/modules-core/src/index.ts
 var src_exports = {};
 __export(src_exports, {
@@ -7094,14 +7048,14 @@ var init_src8 = __esm({
   }
 });
 
-// .wrangler/tmp/bundle-pYclVM/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-lHjXsd/middleware-loader.entry.ts
 init_strip_cf_connecting_ip_header();
 init_modules_watch_stub();
 init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
 init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
 init_performance2();
 
-// .wrangler/tmp/bundle-pYclVM/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-lHjXsd/middleware-insertion-facade.js
 init_strip_cf_connecting_ip_header();
 init_modules_watch_stub();
 init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
@@ -10022,48 +9976,45 @@ database.get("/tables", async (c) => {
     return c.json({ error: "Failed to fetch tables", message: error3.message }, 500);
   }
 });
-database.get("/tables/remote", async (c) => {
-  const { exec: exec2 } = await Promise.resolve().then(() => (init_child_process(), child_process_exports));
-  const fs = await Promise.resolve().then(() => (init_fs2(), fs_exports));
-  const path = await import("node:path");
-  const wranglerConfigPath = path.resolve(process.cwd(), "wrangler.toml");
-  if (!fs.existsSync(wranglerConfigPath)) {
-    return c.json({ success: false, message: "wrangler.toml not found" }, 404);
+async function queryD1(accountId, databaseId, token, sql2) {
+  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify({ sql: sql2 })
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Cloudflare API Error: ${response.status} ${response.statusText} - ${errorText}`);
   }
-  const content = fs.readFileSync(wranglerConfigPath, "utf-8");
-  const dbNameMatch = content.match(/database_name\s*=\s*"([^"]+)"/);
-  const dbName = dbNameMatch ? dbNameMatch[1] : null;
-  if (!dbName) {
-    return c.json({ success: false, message: "No database_name in wrangler.toml" }, 500);
+  const json = await response.json();
+  if (!json.success || !json.result || json.result.length === 0) {
+    if (json.errors && json.errors.length > 0) {
+      throw new Error(`D1 Query Error: ${JSON.stringify(json.errors)}`);
+    }
+    return [];
+  }
+  return json.result[0].results || [];
+}
+__name(queryD1, "queryD1");
+database.get("/tables/remote", async (c) => {
+  const accountId = c.env.CLOUDFLARE_ACCOUNT_ID;
+  const token = c.env.CLOUDFLARE_API_TOKEN;
+  const databaseId = c.env.CLOUDFLARE_DATABASE_ID || "39a4d54d-a335-4e15-bb6b-b02362fa16ea";
+  if (!accountId || !token) {
+    return c.json({
+      success: false,
+      message: "Remote stats require CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID environment variables."
+    });
   }
   try {
-    const cmdList = `npx wrangler d1 execute ${dbName} --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__drizzle_%'" --json`;
-    const listOutput = await new Promise((resolve, reject) => {
-      exec2(cmdList, { cwd: process.cwd() }, (err, stdout2, stderr2) => {
-        if (err)
-          reject(err);
-        else
-          resolve(stdout2);
-      });
-    });
-    const jsonMatch = listOutput.match(/\[.*\]/s);
-    if (!jsonMatch) {
-      return c.json({ success: false, message: "Failed to parse table list" }, 500);
-    }
-    let tables = [];
-    try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].results) {
-        tables = parsed[0].results;
-      } else {
-        tables = parsed;
-      }
-    } catch (e) {
-      return c.json({ success: false, message: "Invalid JSON from table list" }, 500);
-    }
+    const tables = await queryD1(accountId, databaseId, token, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__drizzle_%'");
     const tableNames = tables.map((t) => t.name);
     if (tableNames.length === 0) {
-      return c.json({ data: [] });
+      return c.json({ success: true, data: {} });
     }
     const countQueries = tableNames.map((name) => {
       const escapedName = name.replace(/'/g, "''");
@@ -10071,26 +10022,7 @@ database.get("/tables/remote", async (c) => {
       return `SELECT '${escapedName}' as name, count(*) as count, (SELECT count(*) FROM pragma_table_info('${escapedName}')) as columns FROM ${identifier}`;
     });
     const fullQuery = countQueries.join(" UNION ALL ");
-    const cmdCounts = `npx wrangler d1 execute ${dbName} --remote --command "${fullQuery.replace(/"/g, '\\"')}" --json`;
-    const countOutput = await new Promise((resolve, reject) => {
-      exec2(cmdCounts, { cwd: process.cwd() }, (err, stdout2, stderr2) => {
-        if (err)
-          reject(err);
-        else
-          resolve(stdout2);
-      });
-    });
-    const countJsonMatch = countOutput.match(/\[.*\]/s);
-    if (!countJsonMatch) {
-      return c.json({ success: false, message: "Failed to parse count results" }, 500);
-    }
-    let stats = [];
-    const parsedCounts = JSON.parse(countJsonMatch[0]);
-    if (Array.isArray(parsedCounts) && parsedCounts.length > 0 && parsedCounts[0].results) {
-      stats = parsedCounts[0].results;
-    } else {
-      stats = parsedCounts;
-    }
+    const stats = await queryD1(accountId, databaseId, token, fullQuery);
     const result = {};
     stats.forEach((s) => {
       result[s.name] = { records: s.count, columns: s.columns };
@@ -10747,7 +10679,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env2, _ctx, middlewareCtx
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-pYclVM/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-lHjXsd/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -10784,7 +10716,7 @@ function __facade_invoke__(request, env2, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-pYclVM/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-lHjXsd/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

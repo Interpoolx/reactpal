@@ -14,6 +14,28 @@ export const tenantsSettingsSection: SettingSection = {
 
     fields: [
         // ============================================================
+        // GENERAL SETTINGS
+        // ============================================================
+        {
+            key: 'tenants.registrationEnabled',
+            label: 'Enable Tenant Registration',
+            type: 'boolean',
+            description: 'Allow new tenants to register',
+            defaultValue: true,
+            scope: 'platform',
+            group: 'General',
+        },
+        {
+            key: 'tenants.requireBusinessEmail',
+            label: 'Require Business Email',
+            type: 'boolean',
+            description: 'Block registration from free email providers (gmail, yahoo, etc.)',
+            defaultValue: false,
+            scope: 'platform',
+            group: 'General',
+        },
+
+        // ============================================================
         // ADMIN UI SETTINGS
         // Controls what features are visible in the Tenants management page
         // ============================================================
@@ -109,43 +131,43 @@ export const tenantsSettingsSection: SettingSection = {
         // VISIBLE COLUMNS - ALL columns from tenants schema
         // ============================================================
         // Basic Info
-        { key: 'tenants.ui.columns.showId', label: 'ID', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showName', label: 'Name', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showSlug', label: 'Slug', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showDomain', label: 'Domain', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showStatus', label: 'Status', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showId', label: 'ID', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showName', label: 'Name', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showSlug', label: 'Slug', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showDomain', label: 'Domain', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showStatus', label: 'Status', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Display Columns' },
         // Lifecycle
-        { key: 'tenants.ui.columns.showTrialEndsAt', label: 'Trial Ends', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showSuspendedAt', label: 'Suspended At', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showSuspendedReason', label: 'Suspended Reason', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showTrialEndsAt', label: 'Trial Ends', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showSuspendedAt', label: 'Suspended At', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showSuspendedReason', label: 'Suspended Reason', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
         // Ownership
-        { key: 'tenants.ui.columns.showOwnerId', label: 'Owner ID', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showOwnerEmail', label: 'Owner Email', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showBillingEmail', label: 'Billing Email', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showOwnerId', label: 'Owner ID', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showOwnerEmail', label: 'Owner Email', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showBillingEmail', label: 'Billing Email', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
         // Subscription
-        { key: 'tenants.ui.columns.showPlanId', label: 'Plan ID', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showPlanName', label: 'Plan', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showBillingStatus', label: 'Billing Status', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showNextBillingDate', label: 'Next Billing', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showMrr', label: 'MRR', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showPlanId', label: 'Plan ID', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showPlanName', label: 'Plan', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showBillingStatus', label: 'Billing Status', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showNextBillingDate', label: 'Next Billing', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showMrr', label: 'MRR', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
         // Resource Limits
-        { key: 'tenants.ui.columns.showMaxUsers', label: 'Max Users', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showMaxStorage', label: 'Max Storage', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showMaxApiCalls', label: 'Max API Calls', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showMaxUsers', label: 'Max Users', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showMaxStorage', label: 'Max Storage', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showMaxApiCalls', label: 'Max API Calls', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
         // Real-time Usage
-        { key: 'tenants.ui.columns.showCurrentUsers', label: 'Current Users', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showStorageUsed', label: 'Storage Used', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showApiCallsThisMonth', label: 'API Calls (Month)', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showCurrentUsers', label: 'Current Users', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showStorageUsed', label: 'Storage Used', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showApiCallsThisMonth', label: 'API Calls (Month)', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
         // Metadata
-        { key: 'tenants.ui.columns.showIndustry', label: 'Industry', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showCompanySize', label: 'Company Size', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showNotes', label: 'Notes', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showTags', label: 'Tags', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showIndustry', label: 'Industry', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showCompanySize', label: 'Company Size', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showNotes', label: 'Notes', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showTags', label: 'Tags', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
         // Audit
-        { key: 'tenants.ui.columns.showLastActivityAt', label: 'Last Activity', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showLastActivityAt', label: 'Last Activity', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, scope: 'platform', group: 'Display Columns' },
 
         // ============================================================
         // FILTER CONFIGURATION

@@ -20,6 +20,13 @@ export const moduleConfig = {
     ],
     dependencies: ['auth', 'users'],
     tags: ['platform', 'multitenancy', 'tenants'],
+    tables: ['tenants', 'domains'],
+    permissions: [
+        'tenants.view',
+        'tenants.manage',
+        'tenants.modules.manage',
+        'tenants.usage.view',
+    ],
 };
 
 export type ModuleConfig = typeof moduleConfig;

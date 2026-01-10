@@ -1,0 +1,12 @@
+{
+  "migrations": [
+    "0005_modular_architecture.sql",
+    "0006_schema_sync.sql",
+    "0007_user_enhancements.sql",
+    "001_initial.sql",
+    "002_auth.sql",
+    "003_add_deleted_at.sql",
+    "004_user_schema_updates.sql"
+  ],
+  "generated": "2026-01-10T10:06:04.402Z"
+}

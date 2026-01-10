@@ -4,6 +4,8 @@ import { tenantResolverMiddleware } from './middleware/tenant-resolver';
 import { adminAuthMiddleware } from './middleware/admin-auth';
 import resolver from './routes/v1/resolver';
 import settings from './routes/v1/settings';
+import schema from './routes/v1/schema';
+import database from './routes/v1/database';
 import { registerModulesRoutes } from './routes/v1/modules';
 import { bootstrapBackend } from './lib/bootstrap';
 import { loadModuleRoutes } from './lib/ModuleLoader';
@@ -34,6 +36,8 @@ app.use('*', adminAuthMiddleware);
 // API Routes
 app.route('/api/v1/resolver', resolver);
 app.route('/api/v1/settings', settings);
+app.route('/api/v1/schema', schema);
+app.route('/api/v1/database', database);
 
 // Module routes (management API)
 registerModulesRoutes(app);

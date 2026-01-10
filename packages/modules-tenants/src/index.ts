@@ -18,6 +18,7 @@ export const tenantsModuleConfig: ModuleConfig = {
     features: ['Tenant Provisioning', 'Domain Mapping', 'Resource Limits', 'Status Management'],
     dependencies: ['auth', 'users'],
     tags: ['multi-tenancy', 'platform', 'infrastructure'],
+    tables: ['tenants', 'tenant_domains'],
 
     routes: registerTenantsRoutes,
 
@@ -54,6 +55,20 @@ export const tenantsModuleConfig: ModuleConfig = {
         console.log(`[Tenants] Platform provisioned`);
         // Create default tenant if not exists
     },
+    apiRoutes: [
+        { method: 'GET', path: '/api/v1/tenants', description: 'List tenants', requiredPermission: 'tenants.view' },
+        { method: 'POST', path: '/api/v1/tenants', description: 'Create tenant', requiredPermission: 'tenants.create' },
+        { method: 'GET', path: '/api/v1/tenants/:id', description: 'Get tenant details', requiredPermission: 'tenants.view' },
+        { method: 'PUT', path: '/api/v1/tenants/:id', description: 'Update tenant', requiredPermission: 'tenants.edit' },
+        { method: 'DELETE', path: '/api/v1/tenants/:id', description: 'Delete tenant', requiredPermission: 'tenants.delete' },
+        { method: 'GET', path: '/api/v1/tenants/domains', description: 'List tenant domains', requiredPermission: 'tenants.view' },
+        { method: 'POST', path: '/api/v1/tenants/:id/restore', description: 'Restore archived tenant', requiredPermission: 'tenants.restore' },
+    ],
+    adminRoutes: [
+        { path: '/hpanel/tenants', component: 'TenantsPage', requiredPermission: 'tenants.view' },
+        { path: '/hpanel/tenants/:id', component: 'TenantDetailPage', requiredPermission: 'tenants.view' },
+    ],
+    frontendRoutes: [],
 };
 
 // Auto-register on import

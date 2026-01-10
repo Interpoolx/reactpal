@@ -14,7 +14,7 @@ export const usersSettingsSection: SettingSection = {
 
     fields: [
         // ============================================================
-        // SEED DATA MANAGEMENT
+        // ADMIN UI
         // ============================================================
         {
             key: 'users.seedData.generate',
@@ -23,13 +23,15 @@ export const usersSettingsSection: SettingSection = {
             description: 'Automatically creates a standard set of users (Admin, Manager, Editor, Viewer, User) for every existing tenant. This is useful for initial setup or restoring standard access levels.',
             defaultValue: null,
             scope: 'platform',
-            group: 'Seed Data',
+            group: 'Admin UI',
             actionUrl: '/api/v1/users/seed',
             actionMethod: 'POST',
             actionLabel: 'Generate Now',
         },
 
-        // User Management
+        // ============================================================
+        // GENERAL SETTINGS
+        // ============================================================
         {
             key: 'users.defaultRole',
             label: 'Default Role for New Users',
@@ -42,6 +44,7 @@ export const usersSettingsSection: SettingSection = {
                 { label: 'Admin', value: 'admin' },
             ],
             scope: 'tenant',
+            group: 'General',
         },
         {
             key: 'users.maxUsersPerTenant',
@@ -50,9 +53,8 @@ export const usersSettingsSection: SettingSection = {
             description: 'Maximum users allowed for this tenant (0 = unlimited)',
             defaultValue: 0,
             scope: 'tenant',
+            group: 'General',
         },
-
-        // Invitation Settings
         {
             key: 'users.invitationExpiryDays',
             label: 'Invitation Expiry (Days)',
@@ -60,6 +62,7 @@ export const usersSettingsSection: SettingSection = {
             description: 'How long invitation links remain valid',
             defaultValue: 7,
             scope: 'tenant',
+            group: 'General',
         },
         {
             key: 'users.allowInviteByNonAdmin',
@@ -68,9 +71,8 @@ export const usersSettingsSection: SettingSection = {
             description: 'Editors can invite new users',
             defaultValue: false,
             scope: 'tenant',
+            group: 'General',
         },
-
-        // Profile Settings
         {
             key: 'users.requirePhoneNumber',
             label: 'Require Phone Number',
@@ -78,6 +80,7 @@ export const usersSettingsSection: SettingSection = {
             description: 'Make phone number a required field',
             defaultValue: false,
             scope: 'tenant',
+            group: 'General',
         },
         {
             key: 'users.allowAvatarUpload',
@@ -86,9 +89,8 @@ export const usersSettingsSection: SettingSection = {
             description: 'Users can upload profile pictures',
             defaultValue: true,
             scope: 'tenant',
+            group: 'General',
         },
-
-        // GDPR / Compliance
         {
             key: 'users.allowDataExport',
             label: 'Allow Data Export',
@@ -96,6 +98,7 @@ export const usersSettingsSection: SettingSection = {
             description: 'Users can export their personal data (GDPR)',
             defaultValue: true,
             scope: 'tenant',
+            group: 'General',
         },
         {
             key: 'users.allowAccountDeletion',
@@ -104,6 +107,7 @@ export const usersSettingsSection: SettingSection = {
             description: 'Users can request account deletion (GDPR)',
             defaultValue: true,
             scope: 'tenant',
+            group: 'General',
         },
 
         // ============================================================
@@ -117,7 +121,7 @@ export const usersSettingsSection: SettingSection = {
             description: 'Display summary stats (Total, Active, Pending, Roles) above the table',
             defaultValue: true,
             scope: 'tenant',
-            group: 'Users Admin UI',
+            group: 'Admin UI',
         },
         {
             key: 'users.ui.showSearch',
@@ -126,7 +130,7 @@ export const usersSettingsSection: SettingSection = {
             description: 'Show search input for filtering users',
             defaultValue: true,
             scope: 'tenant',
-            group: 'Users Admin UI',
+            group: 'Admin UI',
         },
         {
             key: 'users.ui.showExport',
@@ -135,7 +139,7 @@ export const usersSettingsSection: SettingSection = {
             description: 'Allow exporting user data',
             defaultValue: true,
             scope: 'tenant',
-            group: 'Users Admin UI',
+            group: 'Admin UI',
         },
         {
             key: 'users.ui.showImport',
@@ -144,7 +148,7 @@ export const usersSettingsSection: SettingSection = {
             description: 'Allow bulk user import',
             defaultValue: true,
             scope: 'tenant',
-            group: 'Users Admin UI',
+            group: 'Admin UI',
         },
         {
             key: 'users.ui.showBulkActions',
@@ -153,7 +157,7 @@ export const usersSettingsSection: SettingSection = {
             description: 'Allow bulk role change, suspend, delete',
             defaultValue: true,
             scope: 'tenant',
-            group: 'Users Admin UI',
+            group: 'Admin UI',
         },
         {
             key: 'users.ui.allowInvite',
@@ -162,7 +166,7 @@ export const usersSettingsSection: SettingSection = {
             description: 'Enable invite user workflow',
             defaultValue: true,
             scope: 'tenant',
-            group: 'Users Admin UI',
+            group: 'Admin UI',
         },
         {
             key: 'users.ui.showPagination',
@@ -171,7 +175,7 @@ export const usersSettingsSection: SettingSection = {
             description: 'Show pagination controls with page size selector',
             defaultValue: true,
             scope: 'tenant',
-            group: 'Users Admin UI',
+            group: 'Admin UI',
         },
         {
             key: 'users.ui.defaultPageSize',
@@ -186,22 +190,22 @@ export const usersSettingsSection: SettingSection = {
                 { label: '100', value: '100' },
             ],
             scope: 'tenant',
-            group: 'Users Admin UI',
+            group: 'Admin UI',
         },
 
         // ============================================================
         // VISIBLE COLUMNS
         // =================================== =========================
-        { key: 'users.ui.columns.showId', label: 'ID', type: 'boolean', defaultValue: false, scope: 'tenant', group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showUsername', label: 'Username', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showEmail', label: 'Email', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showFullName', label: 'Full Name', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showRole', label: 'Role', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showStatus', label: 'Status', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showLastLogin', label: 'Last Login', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, scope: 'tenant', group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, scope: 'tenant', group: 'Users Table Columns' },
+        { key: 'users.ui.columns.showId', label: 'ID', type: 'boolean', defaultValue: false, scope: 'tenant', group: 'Display Columns' },
+        { key: 'users.ui.columns.showUsername', label: 'Username', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Display Columns' },
+        { key: 'users.ui.columns.showEmail', label: 'Email', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Display Columns' },
+        { key: 'users.ui.columns.showFullName', label: 'Full Name', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Display Columns' },
+        { key: 'users.ui.columns.showRole', label: 'Role', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Display Columns' },
+        { key: 'users.ui.columns.showStatus', label: 'Status', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Display Columns' },
+        { key: 'users.ui.columns.showLastLogin', label: 'Last Login', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Display Columns' },
+        { key: 'users.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, scope: 'tenant', group: 'Display Columns' },
+        { key: 'users.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, scope: 'tenant', group: 'Display Columns' },
+        { key: 'users.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, scope: 'tenant', group: 'Display Columns' },
 
         // ============================================================
         // FILTER CONFIGURATION

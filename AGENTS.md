@@ -78,6 +78,7 @@ You MUST add your module to the bootstrap files for it to be discovered:
 - **No Restrictive rootDir**: Avoid `rootDir: "./src"` in package tsconfigs. It breaks cross-package type checking.
 - **No Circular Imports**: If `Module A` depends on `Module B`, ensure `Module B` is loaded first in the bootstrap process.
 - **Don't Forget the Registry**: If your module has settings, register them via the `settings` property in `ModuleConfig` so they appear in Global Settings.
+- **Map Database Tables**: Always list all database tables associated with your module in the `tables` property of `ModuleConfig` in `module.config.ts`.
 - **No Loose Files in Routes**: Avoid adding files to `backend/src/routes/v1/` if a module in `packages/` already handles that domain.
 
 ---

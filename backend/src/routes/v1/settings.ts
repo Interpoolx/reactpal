@@ -36,10 +36,12 @@ settings.get('/sections/:moduleId', async (c) => {
             }
         }
 
-        // Merge defaults from schema if not in DB
-        const mergedValues: Record<string, any> = {};
+        // Merge DB values first to preserve settings not in the registry (e.g. dynamic UI columns)
+        const mergedValues: Record<string, any> = { ...values };
         section.fields.forEach(field => {
-            mergedValues[field.key] = values[field.key] !== undefined ? values[field.key] : field.defaultValue;
+            if (mergedValues[field.key] === undefined) {
+                mergedValues[field.key] = field.defaultValue;
+            }
         });
 
         return c.json({

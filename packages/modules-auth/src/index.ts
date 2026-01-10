@@ -19,6 +19,7 @@ export const authModuleConfig: ModuleConfig = {
     features: ['Login', 'Logout', 'Session Management', 'Password Reset'],
     dependencies: [],
     tags: ['security', 'identity', 'auth'],
+    tables: ['sessions', 'login_attempts', 'password_resets', 'security_events'],
 
     routes: registerAuthRoutes,
 
@@ -60,6 +61,25 @@ export const authModuleConfig: ModuleConfig = {
         // Auth cannot be disabled for a tenant
         console.warn(`[Auth] Cannot disable auth module`);
     },
+    apiRoutes: [
+        { method: 'POST', path: '/api/v1/auth/login', description: 'Authenticate user and issue tokens' },
+        { method: 'POST', path: '/api/v1/auth/logout', description: 'Invalidate current session' },
+        { method: 'POST', path: '/api/v1/auth/logout-all', description: 'Invalidate all sessions for user' },
+        { method: 'POST', path: '/api/v1/auth/refresh', description: 'Refresh access token' },
+        { method: 'GET', path: '/api/v1/auth/me', description: 'Get current user profile' },
+        { method: 'GET', path: '/api/v1/auth/sessions', description: 'List active sessions', requiredPermission: 'sessions.view' },
+        { method: 'POST', path: '/api/v1/auth/forgot-password', description: 'Request password reset' },
+        { method: 'POST', path: '/api/v1/auth/reset-password', description: 'Reset password with token' },
+    ],
+    adminRoutes: [
+        { path: '/hpanel/security', component: 'SecurityPage', requiredPermission: 'sessions.view' },
+    ],
+    frontendRoutes: [
+        { path: '/login', component: 'LoginPage' },
+        { path: '/register', component: 'RegisterPage' },
+        { path: '/forgot-password', component: 'ForgotPasswordPage' },
+        { path: '/reset-password', component: 'ResetPasswordPage' },
+    ],
 };
 
 // Auto-register on import

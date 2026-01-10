@@ -6,9 +6,16 @@
         "dev": "wrangler dev",
         "deploy": "wrangler deploy",
         "build": "echo 'Build handled by wrangler during deployment'",
-        "db:push": "drizzle-kit push",
-        "db:generate": "drizzle-kit generate",
-        "db:migrate": "wrangler d1 migrations apply reactpal --remote"
+        "db:push": "npm run db:push --prefix ..",
+        "db:studio": "npm run db:studio --prefix ..",
+        "db:generate": "npm run db:generate --prefix ..",
+        "db:migrate": "node ../scripts/d1.cjs migrations apply --local",
+        "db:migrate:remote": "node ../scripts/d1.cjs migrations apply --remote",
+        "db:info": "node ../scripts/d1.cjs info --remote",
+        "db:backup:local": "node ../scripts/d1.cjs backup --local",
+        "db:backup:remote": "node ../scripts/d1.cjs backup --remote",
+        "db:restore:local": "node ../scripts/d1.cjs restore --local",
+        "db:restore:remote": "node ../scripts/d1.cjs restore --remote"
     },
     "dependencies": {
         "@reactpress/shared": "file:../packages/shared",

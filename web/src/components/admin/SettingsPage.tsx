@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
-    Settings, Palette, Plug, Bell, Key, FileText, Contact,
+    Settings, Palette, Plug, Bell, Key, Database, FileText, Contact,
     Search as SearchIcon, Users, Shield, ChevronRight,
     Info, User, Activity, CheckCircle2, Clock, AlertCircle
 } from 'lucide-react';
+import { RightDrawer } from './RightDrawer';
 import { useTenant } from '../../context/TenantContext';
 import { apiFetch } from '../../lib/api';
 import { useToast } from '../ui/Toast';
+import DatabaseSettings from './DatabaseSettings';
 
 interface Tab {
     id: string;
@@ -29,6 +31,7 @@ export function SettingsPage() {
         { id: 'integrations', label: 'Integrations', icon: Plug, category: 'core' },
         { id: 'notifications', label: 'Notifications', icon: Bell, category: 'core' },
         { id: 'api', label: 'API Keys', icon: Key, category: 'core' },
+        { id: 'database', label: 'Database', icon: Database, category: 'core' },
     ];
 
     // Core module tabs (always visible - these are core infrastructure)
@@ -162,6 +165,7 @@ export function SettingsPage() {
                     {activeTab === 'integrations' && <IntegrationsSettings />}
                     {activeTab === 'notifications' && <NotificationsSettings />}
                     {activeTab === 'api' && <ApiSettings />}
+                    {activeTab === 'database' && <DatabaseSettings />}
                     {/* Core Modules */}
                     {activeTab === 'auth' && <AuthSettings />}
                     {activeTab === 'users' && <UsersSettings />}
@@ -295,7 +299,6 @@ function UsersSettings() {
             moduleId="users"
             title="Users Settings"
             description="Configure user management options"
-            filterGroups={['Seed Data', 'Users Admin UI', 'Users Table Columns', 'Users Filters']}
         />
     );
 }
@@ -328,10 +331,40 @@ interface DynamicModuleSettingsProps {
 function DynamicModuleSettings({ moduleId, title, description, filterGroups }: DynamicModuleSettingsProps) {
     const [settings, setSettings] = useState<Record<string, any>>({});
     const [fields, setFields] = useState<SettingFieldDef[]>([]);
+    const [modulePermissions, setModulePermissions] = useState<string[]>([]);
+    const [newPermissionSlug, setNewPermissionSlug] = useState('');
+    const [moduleConfig, setModuleConfig] = useState<any>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const { activeTenant } = useTenant();
     const [seedRefreshTrigger, setSeedRefreshTrigger] = useState(0);
+
+    // Schema Drawer State
+    const [showSchemaDrawer, setShowSchemaDrawer] = useState(false);
+    const [selectedTable, setSelectedTable] = useState<string | null>(null);
+    const [schema, setSchema] = useState<any[]>([]);
+    const [isLoadingSchema, setIsLoadingSchema] = useState(false);
+
+    // Routes Tab State
+    const [routesTab, setRoutesTab] = useState<'api' | 'admin' | 'frontend'>('api');
+
+    const handleViewSchema = async (tableName: string) => {
+        setSelectedTable(tableName);
+        setShowSchemaDrawer(true);
+        setIsLoadingSchema(true);
+        setSchema([]); // Reset previous schema
+        try {
+            const response = await apiFetch(`/api/v1/schema/${tableName}`);
+            if (response.ok) {
+                const data = await response.json();
+                setSchema(data.columns || []);
+            }
+        } catch (error) {
+            console.error('Failed to fetch schema:', error);
+        } finally {
+            setIsLoadingSchema(false);
+        }
+    };
 
     useEffect(() => {
         loadSettings();
@@ -378,12 +411,58 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
     const loadSettings = async () => {
         setIsLoading(true);
         try {
+            // Fetch module metadata to get associated tables
+            try {
+                const modRes = await apiFetch(`/api/v1/modules/${moduleId}`);
+                if (modRes.ok) {
+                    setModuleConfig(await modRes.json());
+                }
+            } catch (err) {
+                console.error('Failed to load module config:', err);
+            }
+
             // Get fallback fields first (these contain the latest field definitions)
             let fallbackFields: SettingFieldDef[] = [];
             if (moduleId === 'users') {
                 fallbackFields = getUsersAdminUIFields();
             } else if (moduleId === 'tenants') {
                 fallbackFields = getTenantsAdminUIFields();
+            }
+
+            // Fetch table schema if applicable to make columns dynamic
+            if (moduleId === 'users' || moduleId === 'tenants') {
+                try {
+                    const schemaRes = await apiFetch(`/api/v1/schema/${moduleId}`);
+                    if (schemaRes.ok) {
+                        const schemaData = await schemaRes.json();
+                        const columns = schemaData.columns;
+                        const columnGroupName = 'Display Columns';
+
+                        // Create dynamic fields from columns
+                        const dynamicColumnFields: SettingFieldDef[] = columns.map((col: any) => {
+                            // Convert snake_case to PascalCase for the key suffix
+                            const pascalName = col.name.split('_').map((word: string) => word.charAt(0).toUpperCase() + word.slice(1)).join('');
+                            // Convert snake_case to Start Case for the label
+                            const label = col.name.split('_').map((word: string) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+
+                            return {
+                                key: `${moduleId}.ui.columns.show${pascalName}`,
+                                label: label,
+                                type: 'boolean' as const,
+                                defaultValue: true,
+                                group: columnGroupName
+                            };
+                        });
+
+                        // Replace hardcoded column fields with dynamic ones
+                        fallbackFields = [
+                            ...fallbackFields.filter(f => !f.group?.includes('Columns')),
+                            ...dynamicColumnFields
+                        ];
+                    }
+                } catch (err) {
+                    console.error('Failed to fetch schema for dynamic columns:', err);
+                }
             }
 
             // Filter fallback by groups if specified
@@ -407,7 +486,6 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
                 const res = await apiFetch(`/api/v1/settings/sections/${moduleId}?tenantId=${activeTenant?.id || 'default'}`);
                 if (res.ok) {
                     const data = await res.json();
-                    // Overlay values from DB (API already merges defaults)
                     if (data.values) {
                         Object.keys(data.values).forEach(key => {
                             if (data.values[key] !== undefined) {
@@ -421,12 +499,78 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
             }
 
             setSettings(initialValues);
+
+            // Fetch available permissions for this module
+            setModulePermissions([]);
+            try {
+                const permRes = await apiFetch('/api/v1/permissions');
+                if (permRes.ok) {
+                    const allPerms = await permRes.json();
+                    const modulePerms = allPerms.find((m: any) => m.moduleId === moduleId);
+                    if (modulePerms) {
+                        setModulePermissions(modulePerms.permissions);
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load permissions:', err);
+            }
         } catch (err) {
             console.error('Failed to load settings:', err);
-            // Use fallback hardcoded fields
             applyFallbackFields();
         } finally {
             setIsLoading(false);
+        }
+    };
+
+    const handleAddPermission = async () => {
+        if (!newPermissionSlug) return;
+        setIsSaving(true);
+        try {
+            const res = await apiFetch('/api/v1/permissions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    moduleId,
+                    slug: newPermissionSlug,
+                })
+            });
+
+            if (res.ok) {
+                showToast('Permission added successfully', 'success');
+                setNewPermissionSlug('');
+                loadSettings(); // Reload to show new permission
+            } else {
+                const err = await res.json();
+                showToast(err.error || 'Failed to add permission', 'error');
+            }
+        } catch (err) {
+            showToast('Network error', 'error');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleDeletePermission = async (permSlug: string) => {
+        if (!confirm(`Are you sure you want to delete the permission "${permSlug}"?`)) return;
+        setIsSaving(true);
+        try {
+            // permSlug might be module.slug or just slug
+            const slugOnly = permSlug.includes('.') ? permSlug.split('.')[1] : permSlug;
+            const res = await apiFetch(`/api/v1/permissions/${moduleId}/${slugOnly}`, {
+                method: 'DELETE'
+            });
+
+            if (res.ok) {
+                showToast('Permission deleted (if it was a custom one)', 'success');
+                loadSettings();
+            } else {
+                const err = await res.json();
+                showToast(err.error || 'Failed to delete permission', 'error');
+            }
+        } catch (err) {
+            showToast('Network error', 'error');
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -493,14 +637,44 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
     };
 
     // Group fields by group property
-    const groupedFields = fields.reduce((acc, field) => {
+    const groupedFields = fields.reduce((acc: Record<string, SettingFieldDef[]>, field: SettingFieldDef) => {
         const group = field.group || 'General';
         if (!acc[group]) acc[group] = [];
         acc[group].push(field);
         return acc;
     }, {} as Record<string, SettingFieldDef[]>);
 
-    const groupNames = Object.keys(groupedFields);
+    // Add Permissions group if available
+    if (modulePermissions.length > 0 && (!filterGroups || filterGroups.includes('Permissions'))) {
+        groupedFields['Permissions'] = [];
+    }
+
+    // Add Tables group if available in module config
+    if (moduleConfig?.tables && moduleConfig.tables.length > 0 && (!filterGroups || filterGroups.includes('Tables'))) {
+        groupedFields['Tables'] = [];
+    }
+
+    // Add Routes group if available in module config
+    if (moduleConfig?.apiRoutes && moduleConfig.apiRoutes.length > 0 && (!filterGroups || filterGroups.includes('Routes'))) {
+        groupedFields['Routes'] = [];
+    }
+
+    // Ensure standard tabs exist for core modules
+    if (['auth', 'users', 'tenants'].includes(moduleId)) {
+        if (!groupedFields['General']) groupedFields['General'] = [];
+        if (!groupedFields['Admin UI']) groupedFields['Admin UI'] = [];
+        if (!groupedFields['Frontend UI']) groupedFields['Frontend UI'] = [];
+    }
+
+    const predefinedOrder = ['General', 'Admin UI', 'Frontend UI', 'Permissions', 'Tables', 'Routes'];
+    const groupNames = Object.keys(groupedFields).sort((a, b) => {
+        const indexA = predefinedOrder.indexOf(a);
+        const indexB = predefinedOrder.indexOf(b);
+        if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+        if (indexA !== -1) return -1;
+        if (indexB !== -1) return 1;
+        return a.localeCompare(b);
+    });
     const [activeGroup, setActiveGroup] = useState(groupNames[0] || '');
 
     // Update active group when fields load
@@ -548,7 +722,17 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
                                 ? 'bg-white/20'
                                 : 'bg-white/10'
                                 }`}>
-                                {groupedFields[groupName].length}
+                                {groupName === 'Permissions' ? modulePermissions.length : (
+                                    groupName === 'Tables' ? moduleConfig?.tables?.length : (
+                                        groupName === 'Routes' ? moduleConfig?.apiRoutes?.length : (
+                                            // Smarter count for Filters
+                                            groupName.includes('Filters') && groupedFields[groupName].some((f: any) => f.type === 'filterConfig')
+                                                ? Object.values(settings[groupedFields[groupName].find((f: any) => f.type === 'filterConfig')?.key || ''] || {})
+                                                    .filter((cfg: any) => cfg.enabled).length
+                                                : groupedFields[groupName].length
+                                        )
+                                    )
+                                )}
                             </span>
                         </button>
                     ))}
@@ -587,26 +771,258 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
                             ))}
                         </div>
                     </div>
+                ) : activeGroup === 'Permissions' ? (
+                    <div className="bg-dark rounded-xl border border-border-muted p-6">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 pb-6 border-b border-border-muted">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-lg bg-brand-primary/10 text-brand-primary flex items-center justify-center">
+                                    <Shield className="w-5 h-5" />
+                                </div>
+                                <div>
+                                    <h3 className="text-sm font-bold">Permissions Management</h3>
+                                    <p className="text-xs text-muted">Manage available permissions for the {moduleId} module.</p>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={loadSettings}
+                                    disabled={isLoading}
+                                    title="Refresh permissions list"
+                                    className="p-1.5 text-muted hover:text-primary transition-colors mr-2"
+                                >
+                                    <Shield className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                                </button>
+                                <input
+                                    type="text"
+                                    placeholder="permission.slug"
+                                    value={newPermissionSlug}
+                                    onChange={(e) => setNewPermissionSlug(e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''))}
+                                    className="px-3 py-1.5 bg-darker border border-border-muted rounded-lg text-xs w-48 focus:border-brand-primary outline-none"
+                                />
+                                <button
+                                    onClick={handleAddPermission}
+                                    disabled={isSaving || !newPermissionSlug}
+                                    className="px-4 py-1.5 bg-brand-primary text-white rounded-lg text-xs font-bold hover:bg-brand-primary/90 disabled:opacity-50 transition-all"
+                                >
+                                    Add
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {modulePermissions.map((permission) => (
+                                <div key={permission} className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-border-muted group hover:border-brand-primary/30 transition-colors">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-2 h-2 rounded-full bg-brand-primary/50 group-hover:bg-brand-primary transition-colors" />
+                                        <span className="text-sm font-mono text-muted group-hover:text-primary transition-colors">{permission}</span>
+                                    </div>
+                                    <button
+                                        onClick={() => handleDeletePermission(permission)}
+                                        className="p-1.5 text-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                                        title="Delete custom permission"
+                                    >
+                                        <Shield className="w-3 h-3" />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                ) : activeGroup === 'Routes' ? (
+                    <div className="bg-dark rounded-xl border border-border-muted p-6 transition-all animate-in fade-in duration-300">
+                        <div className="flex items-center gap-3 mb-6 pb-6 border-b border-border-muted/50">
+                            <div className="w-10 h-10 rounded-lg bg-green-500/10 text-green-400 flex items-center justify-center">
+                                <Plug className="w-5 h-5" />
+                            </div>
+                            <div>
+                                <h3 className="text-sm font-bold">Module Routes</h3>
+                                <p className="text-xs text-muted">Web and API endpoints provided by the {moduleId} module.</p>
+                            </div>
+                        </div>
+
+                        {/* Sub-tabs for Routes */}
+                        <div className="flex gap-2 mb-6">
+                            {['api', 'admin', 'frontend'].map((type) => (
+                                <button
+                                    key={type}
+                                    onClick={() => setRoutesTab(type as any)}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${routesTab === type
+                                        ? 'bg-white/10 text-white'
+                                        : 'text-muted hover:text-primary hover:bg-white/5'
+                                        }`}
+                                >
+                                    {type.toUpperCase()}
+                                    <span className="ml-2 opacity-50">
+                                        {type === 'api' ? moduleConfig?.apiRoutes?.length || 0 :
+                                            type === 'admin' ? moduleConfig?.adminRoutes?.length || 0 :
+                                                moduleConfig?.frontendRoutes?.length || 0}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="grid gap-3">
+                            {routesTab === 'api' && (
+                                <>
+                                    {moduleConfig?.apiRoutes?.length > 0 ? (
+                                        moduleConfig.apiRoutes.map((route: any, idx: number) => (
+                                            <div key={idx} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-border-muted group hover:border-green-500/30 hover:bg-white/[0.07] transition-all">
+                                                <div className="flex items-center gap-4">
+                                                    <div className={`
+                                                    px-2 py-1 rounded text-[10px] font-black uppercase tracking-wider min-w-[50px] text-center border
+                                                    ${route.method === 'GET' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : ''}
+                                                    ${route.method === 'POST' ? 'bg-green-500/10 text-green-400 border-green-500/20' : ''}
+                                                    ${route.method === 'PUT' ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' : ''}
+                                                    ${route.method === 'DELETE' ? 'bg-red-500/10 text-red-400 border-red-500/20' : ''}
+                                                `}>
+                                                        {route.method}
+                                                    </div>
+                                                    <div className="flex flex-col">
+                                                        <span className="text-sm font-mono text-primary/90 group-hover:text-primary transition-colors">{route.path}</span>
+                                                        <span className="text-xs text-muted">{route.description}</span>
+                                                    </div>
+                                                </div>
+                                                {route.requiredPermission && (
+                                                    <div className="hidden md:flex items-center gap-1.5 px-2 py-1 bg-white/5 rounded text-[10px] text-muted border border-white/5">
+                                                        <Key className="w-3 h-3 opacity-70" />
+                                                        <span className="font-mono">{route.requiredPermission}</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div className="p-8 text-center text-muted border border-dashed border-border-muted rounded-xl">
+                                            No API routes defined for this module.
+                                        </div>
+                                    )}
+                                </>
+                            )}
+
+                            {routesTab === 'admin' && (
+                                <>
+                                    {moduleConfig?.adminRoutes?.length > 0 ? (
+                                        moduleConfig.adminRoutes.map((route: any, idx: number) => (
+                                            <div key={idx} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-border-muted group hover:border-purple-500/30 hover:bg-white/[0.07] transition-all">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="px-2 py-1 rounded text-[10px] font-black uppercase tracking-wider min-w-[50px] text-center border bg-purple-500/10 text-purple-400 border-purple-500/20">
+                                                        PAGE
+                                                    </div>
+                                                    <div className="flex flex-col">
+                                                        <span className="text-sm font-mono text-primary/90 group-hover:text-primary transition-colors">{route.path}</span>
+                                                        <span className="text-xs text-muted">Component: {route.component}</span>
+                                                    </div>
+                                                </div>
+                                                {route.requiredPermission && (
+                                                    <div className="hidden md:flex items-center gap-1.5 px-2 py-1 bg-white/5 rounded text-[10px] text-muted border border-white/5">
+                                                        <Key className="w-3 h-3 opacity-70" />
+                                                        <span className="font-mono">{route.requiredPermission}</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div className="p-8 text-center text-muted border border-dashed border-border-muted rounded-xl">
+                                            No admin routes defined for this module.
+                                        </div>
+                                    )}
+                                </>
+                            )}
+
+                            {routesTab === 'frontend' && (
+                                <>
+                                    {moduleConfig?.frontendRoutes?.length > 0 ? (
+                                        moduleConfig.frontendRoutes.map((route: any, idx: number) => (
+                                            <div key={idx} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-border-muted group hover:border-orange-500/30 hover:bg-white/[0.07] transition-all">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="px-2 py-1 rounded text-[10px] font-black uppercase tracking-wider min-w-[50px] text-center border bg-orange-500/10 text-orange-400 border-orange-500/20">
+                                                        APP
+                                                    </div>
+                                                    <div className="flex flex-col">
+                                                        <span className="text-sm font-mono text-primary/90 group-hover:text-primary transition-colors">{route.path}</span>
+                                                        <span className="text-xs text-muted">Component: {route.component}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div className="p-8 text-center text-muted border border-dashed border-border-muted rounded-xl">
+                                            No frontend routes found.
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    </div>
+                ) : activeGroup === 'Tables' ? (
+                    <div className="bg-dark rounded-xl border border-border-muted p-6 transition-all animate-in fade-in duration-300">
+                        <div className="flex items-center gap-3 mb-6 pb-6 border-b border-border-muted/50">
+                            <div className="w-10 h-10 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center">
+                                <Database className="w-5 h-5" />
+                            </div>
+                            <div>
+                                <h3 className="text-sm font-bold">Associated Database Tables</h3>
+                                <p className="text-xs text-muted">Core database resources managed by the {moduleId} module.</p>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {moduleConfig?.tables?.map((table: string) => (
+                                <div key={table} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-border-muted group hover:border-blue-500/30 hover:bg-white/[0.07] transition-all">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-lg bg-blue-500/5 flex items-center justify-center border border-blue-500/10">
+                                            <Database className="w-4 h-4 text-blue-400 opacity-60 group-hover:opacity-100 transition-opacity" />
+                                        </div>
+                                        <div className="flex flex-col">
+                                            <span className="text-sm font-bold text-primary/80 group-hover:text-primary transition-colors">{table}</span>
+                                            <span className="text-[10px] text-muted font-mono uppercase tracking-widest opacity-60">SQLite Table</span>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => handleViewSchema(table)}
+                                        className="px-2 py-0.5 bg-blue-500/10 text-blue-400 rounded text-[10px] font-black uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity border border-blue-500/20 hover:bg-blue-500/20"
+                                    >
+                                        View Schema
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="mt-8 p-4 bg-blue-500/5 rounded-xl border border-blue-500/10 flex items-start gap-3">
+                            <Info className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
+                            <div className="text-xs text-blue-300/70 leading-relaxed">
+                                <p className="font-semibold text-blue-300 mb-1 tracking-tight">Technical Reference</p>
+                                These tables are defined in the module's migration files. Future database designs will ideally use
+                                <span className="font-mono text-blue-300 mx-1 bg-blue-400/10 px-1 rounded">rp_{moduleId}_</span>
+                                as a prefix for improved namespace separation.
+                            </div>
+                        </div>
+                    </div>
                 ) : (
                     /* Regular field rendering for other groups */
-                    <div className="grid gap-4 max-w-2xl">
-                        {activeFields.map((field) => (
-                            <SettingFieldRenderer
-                                key={field.key}
-                                field={field}
-                                value={settings[field.key]}
-                                onChange={(value) => handleChange(field.key, value)}
-                                onAction={async () => {
-                                    await handleAction(field);
-                                    // If seeding, trigger status refresh
-                                    if (field.key === 'users.seedData.generate') {
-                                        setSeedRefreshTrigger(prev => prev + 1);
-                                    }
-                                }}
-                            />
-                        ))}
-                    </div>
-                )}
+                    activeFields.length > 0 ? (
+                        <div className="grid gap-4 max-w-2xl">
+                            {activeFields.map((field) => (
+                                <SettingFieldRenderer
+                                    key={field.key}
+                                    field={field}
+                                    value={settings[field.key]}
+                                    onChange={(value) => handleChange(field.key, value)}
+                                    onAction={async () => {
+                                        await handleAction(field);
+                                        // If seeding, trigger status refresh
+                                        if (field.key === 'users.seedData.generate') {
+                                            setSeedRefreshTrigger(prev => prev + 1);
+                                        }
+                                    }}
+                                />
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="p-8 text-center text-muted border border-dashed border-border-muted rounded-xl bg-white/5">
+                            <p>No specific {activeGroup.toLowerCase()} settings found.</p>
+                        </div>
+                    )
+                )
+                }
                 {activeGroup === 'Seed Data' && <SeedDataPreview refreshTrigger={seedRefreshTrigger} />}
             </div>
 
@@ -620,7 +1036,70 @@ function DynamicModuleSettings({ moduleId, title, description, filterGroups }: D
                     {isSaving ? 'Saving...' : 'Save Settings'}
                 </button>
             </div>
-        </div>
+
+            {/* Schema Drawer */}
+            <RightDrawer
+                isOpen={showSchemaDrawer}
+                onClose={() => setShowSchemaDrawer(false)}
+                title={`Schema: ${selectedTable}`}
+            >
+                <div>
+                    <div className="mb-6">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Database className="w-5 h-5 text-blue-400" />
+                            <h3 className="text-lg font-bold">{selectedTable}</h3>
+                        </div>
+                        <p className="text-sm text-muted">Field definition and types for this table.</p>
+                    </div>
+
+                    {isLoadingSchema ? (
+                        <div className="flex justify-center py-12">
+                            <div className="w-8 h-8 border-2 border-brand-primary border-t-transparent rounded-full animate-spin" />
+                        </div>
+                    ) : (
+                        <div className="border border-border-muted rounded-lg overflow-hidden">
+                            <table className="w-full text-sm text-left">
+                                <thead className="bg-white/5 text-muted font-medium">
+                                    <tr>
+                                        <th className="p-3 border-b border-border-muted">Column</th>
+                                        <th className="p-3 border-b border-border-muted">Type</th>
+                                        <th className="p-3 border-b border-border-muted">Attributes</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-border-muted">
+                                    {schema.map((col: any) => (
+                                        <tr key={col.name} className="hover:bg-white/5">
+                                            <td className="p-3 font-mono text-primary font-medium">{col.name}</td>
+                                            <td className="p-3 text-blue-300 font-mono text-xs">{col.type}</td>
+                                            <td className="p-3">
+                                                <div className="flex gap-2 flex-wrap">
+                                                    {col.pk && (
+                                                        <span className="px-1.5 py-0.5 bg-yellow-500/10 text-yellow-500 rounded text-[10px] font-bold border border-yellow-500/20" title="Primary Key">PK</span>
+                                                    )}
+                                                    {col.notnull && (
+                                                        <span className="px-1.5 py-0.5 bg-red-500/10 text-red-500 rounded text-[10px] font-bold border border-red-500/20" title="Required (Not Null)">REQ</span>
+                                                    )}
+                                                    {col.defaultValue !== null && (
+                                                        <span className="px-1.5 py-0.5 bg-white/5 text-muted rounded text-[10px] border border-white/10" title={`Default: ${col.defaultValue}`}>
+                                                            DEF
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                            {schema.length === 0 && !isLoadingSchema && (
+                                <div className="p-8 text-center text-muted">
+                                    No columns found or access denied.
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </RightDrawer >
+        </div >
     );
 }
 
@@ -893,23 +1372,23 @@ function SettingFieldRenderer({
 // Fallback fields for Users Admin UI when API not available
 function getUsersAdminUIFields(): SettingFieldDef[] {
     return [
-        { key: 'users.ui.showStatsCards', label: 'Show Stats Cards', type: 'boolean', description: 'Display summary stats above the table', defaultValue: true, group: 'Users Admin UI' },
-        { key: 'users.ui.showSearch', label: 'Enable Search', type: 'boolean', description: 'Show search input for filtering users', defaultValue: true, group: 'Users Admin UI' },
-        { key: 'users.ui.showExport', label: 'Enable Export', type: 'boolean', description: 'Allow exporting user data', defaultValue: true, group: 'Users Admin UI' },
-        { key: 'users.ui.showImport', label: 'Enable Import', type: 'boolean', description: 'Allow bulk user import', defaultValue: true, group: 'Users Admin UI' },
-        { key: 'users.ui.showBulkActions', label: 'Enable Bulk Actions', type: 'boolean', description: 'Allow bulk role change, suspend, delete', defaultValue: true, group: 'Users Admin UI' },
-        { key: 'users.ui.allowInvite', label: 'Allow User Invites', type: 'boolean', description: 'Enable invite user workflow', defaultValue: true, group: 'Users Admin UI' },
-        { key: 'users.ui.showPagination', label: 'Show Pagination', type: 'boolean', description: 'Show pagination controls', defaultValue: true, group: 'Users Admin UI' },
-        { key: 'users.ui.columns.showId', label: 'ID', type: 'boolean', defaultValue: false, group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showUsername', label: 'Username', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showEmail', label: 'Email', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showFullName', label: 'Full Name', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showRole', label: 'Role', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showStatus', label: 'Status', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showLastLogin', label: 'Last Login', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, group: 'Users Table Columns' },
-        { key: 'users.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, group: 'Users Table Columns' },
+        { key: 'users.ui.showStatsCards', label: 'Show Stats Cards', type: 'boolean', description: 'Display summary stats above the table', defaultValue: true, group: 'Admin UI' },
+        { key: 'users.ui.showSearch', label: 'Enable Search', type: 'boolean', description: 'Show search input for filtering users', defaultValue: true, group: 'Admin UI' },
+        { key: 'users.ui.showExport', label: 'Enable Export', type: 'boolean', description: 'Allow exporting user data', defaultValue: true, group: 'Admin UI' },
+        { key: 'users.ui.showImport', label: 'Enable Import', type: 'boolean', description: 'Allow bulk user import', defaultValue: true, group: 'Admin UI' },
+        { key: 'users.ui.showBulkActions', label: 'Enable Bulk Actions', type: 'boolean', description: 'Allow bulk role change, suspend, delete', defaultValue: true, group: 'Admin UI' },
+        { key: 'users.ui.allowInvite', label: 'Allow User Invites', type: 'boolean', description: 'Enable invite user workflow', defaultValue: true, group: 'Admin UI' },
+        { key: 'users.ui.showPagination', label: 'Show Pagination', type: 'boolean', description: 'Show pagination controls', defaultValue: true, group: 'Admin UI' },
+        { key: 'users.ui.columns.showId', label: 'ID', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'users.ui.columns.showUsername', label: 'Username', type: 'boolean', defaultValue: true, group: 'Display Columns' },
+        { key: 'users.ui.columns.showEmail', label: 'Email', type: 'boolean', defaultValue: true, group: 'Display Columns' },
+        { key: 'users.ui.columns.showFullName', label: 'Full Name', type: 'boolean', defaultValue: true, group: 'Display Columns' },
+        { key: 'users.ui.columns.showRole', label: 'Role', type: 'boolean', defaultValue: true, group: 'Display Columns' },
+        { key: 'users.ui.columns.showStatus', label: 'Status', type: 'boolean', defaultValue: true, group: 'Display Columns' },
+        { key: 'users.ui.columns.showLastLogin', label: 'Last Login', type: 'boolean', defaultValue: true, group: 'Display Columns' },
+        { key: 'users.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, group: 'Display Columns' },
+        { key: 'users.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'users.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, group: 'Display Columns' },
 
         // Filter Configuration - JSON structure for dynamic filter settings
         {
@@ -961,43 +1440,43 @@ function getTenantsAdminUIFields(): SettingFieldDef[] {
 
         // Table Columns - ALL columns from tenants schema
         // Basic Info
-        { key: 'tenants.ui.columns.showId', label: 'ID', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showName', label: 'Name', type: 'boolean', defaultValue: true, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showSlug', label: 'Slug', type: 'boolean', defaultValue: true, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showDomain', label: 'Domain', type: 'boolean', defaultValue: true, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showStatus', label: 'Status', type: 'boolean', defaultValue: true, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showId', label: 'ID', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showName', label: 'Name', type: 'boolean', defaultValue: true, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showSlug', label: 'Slug', type: 'boolean', defaultValue: true, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showDomain', label: 'Domain', type: 'boolean', defaultValue: true, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showStatus', label: 'Status', type: 'boolean', defaultValue: true, group: 'Display Columns' },
         // Lifecycle
-        { key: 'tenants.ui.columns.showTrialEndsAt', label: 'Trial Ends', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showSuspendedAt', label: 'Suspended At', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showSuspendedReason', label: 'Suspended Reason', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showTrialEndsAt', label: 'Trial Ends', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showSuspendedAt', label: 'Suspended At', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showSuspendedReason', label: 'Suspended Reason', type: 'boolean', defaultValue: false, group: 'Display Columns' },
         // Ownership
-        { key: 'tenants.ui.columns.showOwnerId', label: 'Owner ID', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showOwnerEmail', label: 'Owner Email', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showBillingEmail', label: 'Billing Email', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showOwnerId', label: 'Owner ID', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showOwnerEmail', label: 'Owner Email', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showBillingEmail', label: 'Billing Email', type: 'boolean', defaultValue: false, group: 'Display Columns' },
         // Subscription
-        { key: 'tenants.ui.columns.showPlanId', label: 'Plan ID', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showPlanName', label: 'Plan', type: 'boolean', defaultValue: true, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showBillingStatus', label: 'Billing Status', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showNextBillingDate', label: 'Next Billing', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showMrr', label: 'MRR', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showPlanId', label: 'Plan ID', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showPlanName', label: 'Plan', type: 'boolean', defaultValue: true, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showBillingStatus', label: 'Billing Status', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showNextBillingDate', label: 'Next Billing', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showMrr', label: 'MRR', type: 'boolean', defaultValue: false, group: 'Display Columns' },
         // Resource Limits
-        { key: 'tenants.ui.columns.showMaxUsers', label: 'Max Users', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showMaxStorage', label: 'Max Storage', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showMaxApiCalls', label: 'Max API Calls', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showMaxUsers', label: 'Max Users', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showMaxStorage', label: 'Max Storage', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showMaxApiCalls', label: 'Max API Calls', type: 'boolean', defaultValue: false, group: 'Display Columns' },
         // Real-time Usage
-        { key: 'tenants.ui.columns.showCurrentUsers', label: 'Current Users', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showStorageUsed', label: 'Storage Used', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showApiCallsThisMonth', label: 'API Calls (Month)', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showCurrentUsers', label: 'Current Users', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showStorageUsed', label: 'Storage Used', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showApiCallsThisMonth', label: 'API Calls (Month)', type: 'boolean', defaultValue: false, group: 'Display Columns' },
         // Metadata
-        { key: 'tenants.ui.columns.showIndustry', label: 'Industry', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showCompanySize', label: 'Company Size', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showNotes', label: 'Notes', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showTags', label: 'Tags', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showIndustry', label: 'Industry', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showCompanySize', label: 'Company Size', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showNotes', label: 'Notes', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showTags', label: 'Tags', type: 'boolean', defaultValue: false, group: 'Display Columns' },
         // Audit
-        { key: 'tenants.ui.columns.showLastActivityAt', label: 'Last Activity', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, group: 'Table Columns' },
-        { key: 'tenants.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, group: 'Table Columns' },
+        { key: 'tenants.ui.columns.showLastActivityAt', label: 'Last Activity', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showCreatedAt', label: 'Created', type: 'boolean', defaultValue: true, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showUpdatedAt', label: 'Updated', type: 'boolean', defaultValue: false, group: 'Display Columns' },
+        { key: 'tenants.ui.columns.showCreatedBy', label: 'Created By', type: 'boolean', defaultValue: false, group: 'Display Columns' },
 
         // Defaults
         { key: 'tenants.defaultPlan', label: 'Default Plan', type: 'select', description: 'Plan assigned to new tenants', defaultValue: 'free', options: [{ label: 'Free', value: 'free' }, { label: 'Starter', value: 'starter' }, { label: 'Professional', value: 'professional' }, { label: 'Enterprise', value: 'enterprise' }], group: 'Defaults' },
@@ -1299,62 +1778,12 @@ function SEOSettings() {
 
 // Core Module Settings Components
 function AuthSettings() {
-    const [sessionTimeout, setSessionTimeout] = useState(30);
-    const [maxLoginAttempts, setMaxLoginAttempts] = useState(5);
-    const [lockoutDuration, setLockoutDuration] = useState(15);
-    const [requireMFA, setRequireMFA] = useState(false);
-
     return (
-        <div className="space-y-6">
-            <div>
-                <h2 className="text-lg font-semibold">Authentication Settings</h2>
-                <p className="text-sm text-muted">Configure login and security policies</p>
-            </div>
-            <div className="grid gap-4 max-w-md">
-                <div>
-                    <label className="block text-sm font-medium mb-1">Session Timeout (days)</label>
-                    <input
-                        type="number"
-                        value={sessionTimeout}
-                        onChange={(e) => setSessionTimeout(parseInt(e.target.value))}
-                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
-                    />
-                </div>
-                <div>
-                    <label className="block text-sm font-medium mb-1">Max Login Attempts</label>
-                    <input
-                        type="number"
-                        value={maxLoginAttempts}
-                        onChange={(e) => setMaxLoginAttempts(parseInt(e.target.value))}
-                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
-                    />
-                </div>
-                <div>
-                    <label className="block text-sm font-medium mb-1">Account Lockout Duration (minutes)</label>
-                    <input
-                        type="number"
-                        value={lockoutDuration}
-                        onChange={(e) => setLockoutDuration(parseInt(e.target.value))}
-                        className="w-full px-3 py-2 bg-dark border border-border-muted rounded-lg"
-                    />
-                </div>
-                <label className="flex items-center justify-between p-4 bg-dark rounded-lg border border-border-muted cursor-pointer">
-                    <div>
-                        <div className="font-medium">Require 2FA</div>
-                        <div className="text-xs text-muted">Require two-factor authentication</div>
-                    </div>
-                    <input
-                        type="checkbox"
-                        checked={requireMFA}
-                        onChange={(e) => setRequireMFA(e.target.checked)}
-                        className="w-5 h-5 rounded border-gray-600 bg-dark text-brand-primary"
-                    />
-                </label>
-                <button className="px-4 py-2 bg-brand-primary text-white rounded-lg font-semibold w-fit">
-                    Save Auth Settings
-                </button>
-            </div>
-        </div>
+        <DynamicModuleSettings
+            moduleId="auth"
+            title="Authentication Settings"
+            description="Configure login and security policies"
+        />
     );
 }
 

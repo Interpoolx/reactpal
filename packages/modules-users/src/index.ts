@@ -18,6 +18,7 @@ export const usersModuleConfig: ModuleConfig = {
     features: ['User CRUD', 'Role Management', 'Permissions', 'Invitations'],
     dependencies: ['auth'],
     tags: ['users', 'roles', 'permissions', 'access'],
+    tables: ['users', 'roles', 'permissions', 'user_roles', 'role_permissions', 'invitations'],
 
     routes: registerUsersRoutes,
 
@@ -90,6 +91,22 @@ export const usersModuleConfig: ModuleConfig = {
     onEnable: async (tenantId, db) => {
         console.log(`[Users] Enabled for tenant: ${tenantId}`);
     },
+    apiRoutes: [
+        { method: 'GET', path: '/api/v1/users', description: 'List users', requiredPermission: 'users.view' },
+        { method: 'POST', path: '/api/v1/users', description: 'Create user', requiredPermission: 'users.create' },
+        { method: 'GET', path: '/api/v1/users/:id', description: 'Get user details', requiredPermission: 'users.view' },
+        { method: 'PUT', path: '/api/v1/users/:id', description: 'Update user', requiredPermission: 'users.edit' },
+        { method: 'DELETE', path: '/api/v1/users/:id', description: 'Delete user', requiredPermission: 'users.delete' },
+        { method: 'POST', path: '/api/v1/users/invite', description: 'Invite new user', requiredPermission: 'users.invite' },
+        { method: 'GET', path: '/api/v1/roles', description: 'List roles', requiredPermission: 'roles.view' },
+        { method: 'POST', path: '/api/v1/roles', description: 'Create role', requiredPermission: 'roles.create' },
+        { method: 'GET', path: '/api/v1/permissions', description: 'List permissions', requiredPermission: 'roles.view' },
+    ],
+    adminRoutes: [
+        { path: '/hpanel/users', component: 'UsersPage', requiredPermission: 'users.view' },
+        { path: '/hpanel/users/roles', component: 'RolesPage', requiredPermission: 'roles.view' },
+    ],
+    frontendRoutes: [],
 };
 
 // Auto-register on import

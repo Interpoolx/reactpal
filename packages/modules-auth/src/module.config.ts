@@ -20,6 +20,13 @@ export const moduleConfig = {
     ],
     dependencies: [],
     tags: ['security', 'auth', 'login'],
+    tables: ['sessions', 'login_attempts', 'password_resets', 'security_events'],
+    permissions: [
+        'auth.sessions.view',
+        'auth.sessions.manage',
+        'auth.policies.manage',
+        'auth.security.view',
+    ],
 };
 
 export type ModuleConfig = typeof moduleConfig;

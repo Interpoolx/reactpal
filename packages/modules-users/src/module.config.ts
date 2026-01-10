@@ -20,6 +20,16 @@ export const moduleConfig = {
     ],
     dependencies: ['auth'],
     tags: ['users', 'rbac', 'permissions'],
+    tables: ['users', 'roles', 'permissions', 'user_roles', 'role_permissions', 'invitations'],
+    permissions: [
+        'users.view',
+        'users.create',
+        'users.edit',
+        'users.delete',
+        'users.invite',
+        'roles.view',
+        'roles.manage',
+    ],
 };
 
 export type ModuleConfig = typeof moduleConfig;

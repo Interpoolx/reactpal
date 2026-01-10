@@ -29,6 +29,19 @@ interface User {
     created_at: number;
     updated_at?: number;
     avatar_url?: string;
+    joined_via?: string;
+    last_activity_at?: number;
+}
+
+interface Invitation {
+    id: string;
+    email: string;
+    role_id: string;
+    status: 'pending' | 'accepted' | 'expired' | 'cancelled';
+    token: string;
+    invited_by: string;
+    expires_at: number;
+    created_at: number;
 }
 
 interface Role {
@@ -250,13 +263,16 @@ export function UsersPage() {
     const [roleFilter, setRoleFilter] = useState<string>('all');
     const [currentPage, setCurrentPage] = useState(1);
     const [pageSize, setPageSize] = useState(PAGINATION_CONFIG.defaultPageSize);
+    const [activeTab, setActiveTab] = useState<'users' | 'invitations'>('users');
+    const [invitations, setInvitations] = useState<Invitation[]>([]);
     const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({});
     const [uiSettings, setUiSettings] = useState<Record<string, any>>({});
     const [filters, setFilters] = useState<Record<string, any>>({});
     const [sorting, setSorting] = useState<Record<string, 'asc' | 'desc' | null>>({});
+    const [schemaColumns, setSchemaColumns] = useState<any[]>([]);
     const [isSaving, setIsSaving] = useState(false);
-    const { activeTenant } = useTenant();
+    const { activeTenant, refresh: refreshTenantUsage } = useTenant();
     const { showToast } = useToast();
 
     // Action Confirmation Modal State
@@ -303,6 +319,24 @@ export function UsersPage() {
         }
     }, [activeTenant?.id, statusFilter, debouncedSearch, showToast]);
 
+    const fetchInvitations = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const params = new URLSearchParams();
+            if (activeTenant?.id) params.set('tenantId', activeTenant.id);
+
+            const res = await apiFetch(`/api/v1/invitations?${params.toString()}`);
+            if (!res.ok) throw new Error('Failed to fetch invitations');
+            const data = await res.json();
+            setInvitations(data);
+        } catch (err) {
+            console.error('Failed to fetch invitations', err);
+            showToast('Failed to fetch invitations', 'error');
+        } finally {
+            setIsLoading(false);
+        }
+    }, [activeTenant?.id, showToast]);
+
     const fetchRoles = async () => {
         try {
             const res = await apiFetch(PAGE_CONFIG.rolesEndpoint);
@@ -316,42 +350,55 @@ export function UsersPage() {
         }
     };
 
-    // Load UI settings from database
-    useEffect(() => {
-        const loadSettings = async () => {
-            try {
-                let settings: Record<string, any> = {};
+    const fetchUiSettings = useCallback(async () => {
+        try {
+            let settings: Record<string, any> = {};
 
-                // Load from database via API
-                const res = await apiFetch(`/api/v1/settings/sections/users?tenantId=${activeTenant?.id || 'default'}`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.values) {
-                        settings = data.values;
-                    }
+            // Load from database via API
+            const res = await apiFetch(`/api/v1/settings/sections/users?tenantId=${activeTenant?.id || 'default'}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.values) {
+                    settings = data.values;
                 }
+            }
 
-                setUiSettings(settings);
+            setUiSettings(settings);
 
-                // Set visible columns
-                const colSettings: Record<string, boolean> = {};
-                Object.keys(settings).forEach(key => {
-                    if (key.startsWith('users.ui.columns.show')) {
-                        colSettings[key] = settings[key];
-                    }
-                });
-                setVisibleColumns(colSettings);
+            // Set visible columns
+            const colSettings: Record<string, boolean> = {};
+            Object.keys(settings).forEach(key => {
+                if (key.startsWith('users.ui.columns.show')) {
+                    colSettings[key] = settings[key];
+                }
+            });
+            setVisibleColumns(colSettings);
 
-                // Set default page size if available
-                if (settings['users.ui.defaultPageSize']) {
-                    setPageSize(parseInt(settings['users.ui.defaultPageSize']));
+            // Set default page size if available
+            if (settings['users.ui.defaultPageSize']) {
+                setPageSize(parseInt(settings['users.ui.defaultPageSize']));
+            }
+
+            // Fetch schema for dynamic columns
+            try {
+                const schemaRes = await apiFetch('/api/v1/schema/users');
+                if (schemaRes.ok) {
+                    const schemaData = await schemaRes.json();
+                    setSchemaColumns(schemaData.columns || []);
                 }
             } catch (err) {
-                console.error('Failed to load settings', err);
+                console.error('Failed to fetch schema', err);
             }
-        };
-        loadSettings();
+        } catch (err) {
+            console.error('Failed to load settings', err);
+        }
     }, [activeTenant?.id]);
+
+    // Load UI settings from database
+    useEffect(() => {
+        fetchRoles();
+        fetchUiSettings();
+    }, []);
 
     // Debounce search
     useEffect(() => {
@@ -363,9 +410,12 @@ export function UsersPage() {
     }, [searchQuery]);
 
     useEffect(() => {
-        fetchUsers();
-        fetchRoles();
-    }, [activeTenant, fetchUsers]);
+        if (activeTab === 'users') {
+            fetchUsers();
+        } else {
+            fetchInvitations();
+        }
+    }, [fetchUsers, fetchInvitations, activeTab]);
 
     // Handlers
     const handleInvite = () => { setSelectedUser(null); setDrawerMode('invite'); setDrawerOpen(true); };
@@ -461,39 +511,39 @@ export function UsersPage() {
     };
 
     // Filter users (with debounced search)
-    let filteredUsers = users.filter(user => {
-        const matchesSearch = !debouncedSearch ||
-            user.email?.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
-            user.first_name?.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
-            user.last_name?.toLowerCase().includes(debouncedSearch.toLowerCase());
+    // Updated Filtering logic for multi-select roles
+    const filteredUsers = users.filter(user => {
         const matchesStatus = statusFilter === 'all' || user.status === statusFilter;
+        // Role filter can be 'all' or a slug. In the future we might want multi-select.
+        // For now, let's just make sure slug matches.
         const matchesRole = roleFilter === 'all' || user.role === roleFilter;
 
-        // Dynamic filters
-        const matchesDynamic = Object.entries(filters).every(([key, value]) => {
-            if (!value || value === 'all') return true;
-            const cellValue = (user as any)[key];
+        const searchLower = searchQuery.toLowerCase();
+        const matchesSearch = !searchQuery ||
+            user.username?.toLowerCase().includes(searchLower) ||
+            user.email?.toLowerCase().includes(searchLower) ||
+            user.first_name?.toLowerCase().includes(searchLower) ||
+            user.last_name?.toLowerCase().includes(searchLower);
 
-            // Handle range filters
-            if (typeof value === 'object' && (value.min !== undefined || value.max !== undefined)) {
-                const val = Number(cellValue || 0);
-                if (value.min && val < Number(value.min)) return false;
-                if (value.max && val > Number(value.max)) return false;
-                return true;
+        // Advanced filters from settings
+        const matchesCustomFilters = Object.entries(filters).every(([key, value]) => {
+            if (!value || value === 'all' || value === '') return true;
+            const userValue = (user as any)[key];
+
+            if (typeof value === 'object') {
+                if (value.min && userValue < value.min) return false;
+                if (value.max && userValue > value.max) return false;
+                if (value.start && userValue < new Date(value.start).getTime() / 1000) return false;
+                if (value.end && userValue > new Date(value.end).getTime() / 1000) return false;
+            } else if (Array.isArray(value)) {
+                return value.includes(userValue);
+            } else {
+                return String(userValue).toLowerCase().includes(String(value).toLowerCase());
             }
-
-            if (typeof value === 'object' && (value.start !== undefined || value.end !== undefined)) {
-                const val = cellValue ? new Date(cellValue).getTime() : 0;
-                if (value.start && val < new Date(value.start).getTime()) return false;
-                if (value.end && val > new Date(value.end).getTime()) return false;
-                return true;
-            }
-
-            const strValue = String(cellValue || '').toLowerCase();
-            return strValue.includes(String(value).toLowerCase());
+            return true;
         });
 
-        return matchesSearch && matchesStatus && matchesRole && matchesDynamic;
+        return matchesStatus && matchesRole && matchesSearch && matchesCustomFilters;
     });
 
     // Dynamic sorting
@@ -598,15 +648,29 @@ export function UsersPage() {
             showSetting: 'users.ui.columns.showStatus'
         },
         {
-            id: 'last_login_at',
-            accessorKey: 'last_login_at',
-            header: 'Last Login',
+            id: 'joined_via',
+            accessorKey: 'joined_via',
+            header: 'Joined Via',
             cell: ({ row }) => (
-                <span className="text-muted text-sm italic">
-                    {getRelativeTime(row.original.last_login_at)}
+                <span className="text-xs px-2 py-0.5 rounded-full bg-white/5 border border-border-muted capitalize">
+                    {row.original.joined_via || 'signup'}
                 </span>
             ),
-            showSetting: 'users.ui.columns.showLastLogin'
+            showSetting: 'users.ui.columns.showJoinedVia'
+        },
+        {
+            id: 'last_active',
+            accessorKey: 'last_activity_at',
+            header: 'Last Active',
+            cell: ({ row }) => {
+                const lastActive = row.original.last_activity_at || row.original.last_login_at;
+                return (
+                    <span className="text-muted text-sm italic">
+                        {lastActive ? getRelativeTime(lastActive) : 'Never'}
+                    </span>
+                );
+            },
+            showSetting: 'users.ui.columns.showLastActivityAt'
         },
         {
             id: 'created_at',
@@ -647,14 +711,147 @@ export function UsersPage() {
         },
     ];
 
-    // Filter columns based on settings
-    const columns = allColumns.filter(col => {
-        const settingKey = col.showSetting;
+    const baseColumns = [...allColumns];
+    schemaColumns.forEach(sc => {
+        const pascalName = sc.name.split('_').map((word: string) => word.charAt(0).toUpperCase() + word.slice(1)).join('');
+        const showKey = `users.ui.columns.show${pascalName}`;
+
+        // Check if this DB field is already covered by a hardcoded column
+        // We match by showSetting OR by accessorKey directly
+        const isCovered = allColumns.some(col =>
+            col.showSetting === showKey ||
+            (col as any).accessorKey === sc.name ||
+            (col.id === 'name' && (sc.name === 'first_name' || sc.name === 'last_name' || sc.name === 'username'))
+        );
+
+        if (!isCovered) {
+            const label = sc.name.split('_').map((word: string) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+            baseColumns.push({
+                id: sc.name,
+                accessorKey: sc.name,
+                header: label,
+                cell: ({ row }: { row: any }) => {
+                    const val = row.original[sc.name as keyof User];
+                    if (val === null || val === undefined) return <span className="text-muted">—</span>;
+                    if (typeof val === 'number' && (sc.name.endsWith('_at') || sc.name === 'created_at' || sc.name === 'updated_at')) {
+                        return <span className="text-sm">{new Date(val * 1000).toLocaleDateString()}</span>;
+                    }
+                    if (typeof val === 'boolean') {
+                        return val ? <CheckCircle className="w-4 h-4 text-green-500" /> : <XCircle className="w-4 h-4 text-red-500" />;
+                    }
+                    return <span className="text-sm">{String(val)}</span>;
+                },
+                showSetting: showKey
+            });
+        }
+    });
+
+    const columns = baseColumns.filter(col => {
+        const settingKey = (col as any).showSetting;
         if (!settingKey) return true;
-        // Specifically for name/username/email - if any is on, we show the combined 'name' col if it's the main handle
-        if (col.id === 'name') return true;
+
+        // Ensure actions and mandatory columns stay
+        if (col.id === 'quickActions' || col.id === 'actions') return true;
+
+        // Special case for 'User' (name) column - it combines multiple fields
+        // Since we moved its setting to showUsername, it follows that now
+        if (col.id === 'name' && col.showSetting === 'users.ui.columns.showUsername') {
+            return visibleColumns['users.ui.columns.showUsername'] !== false;
+        }
+
         return visibleColumns[settingKey] !== false;
     });
+
+    const handleResendInvite = async (id: string) => {
+        try {
+            const res = await apiFetch(`/api/v1/invitations/${id}/resend`, { method: 'POST' });
+            if (res.ok) {
+                showToast('Invitation resent successfully', 'success');
+                fetchInvitations();
+                refreshTenantUsage();
+            } else {
+                throw new Error('Failed to resend');
+            }
+        } catch (err) {
+            showToast('Failed to resend invitation', 'error');
+        }
+    };
+
+    const handleRevokeInvite = async (id: string) => {
+        if (!confirm('Are you sure you want to revoke this invitation?')) return;
+        try {
+            const res = await apiFetch(`/api/v1/invitations/${id}`, { method: 'DELETE' });
+            if (res.ok) {
+                showToast('Invitation revoked', 'info');
+                fetchInvitations();
+                refreshTenantUsage();
+            } else {
+                throw new Error('Failed to revoke');
+            }
+        } catch (err) {
+            showToast('Failed to revoke invitation', 'error');
+        }
+    };
+
+    const invitationColumns: ColumnDef<any, any>[] = [
+        {
+            id: 'email',
+            accessorKey: 'email',
+            header: 'Invited Email',
+            cell: ({ row }) => <span className="font-medium text-sm">{row.original.email}</span>
+        },
+        {
+            id: 'role',
+            accessorKey: 'role_id',
+            header: 'Assigned Role',
+            cell: ({ row }) => <RoleBadge role={row.original.role_id} />
+        },
+        {
+            id: 'status',
+            accessorKey: 'status',
+            header: 'Status',
+            cell: ({ row }) => (
+                <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${row.original.status === 'pending' ? 'bg-blue-500/20 text-blue-400' :
+                    row.original.status === 'expired' ? 'bg-orange-500/20 text-orange-400' :
+                        'bg-gray-500/20 text-gray-400'
+                    }`}>
+                    {row.original.status}
+                </span>
+            )
+        },
+        {
+            id: 'invited_by',
+            accessorKey: 'invited_by',
+            header: 'Invited By',
+            cell: ({ row }) => <span className="text-sm text-muted">{row.original.invited_by}</span>
+        },
+        {
+            id: 'expires_at',
+            accessorKey: 'expires_at',
+            header: 'Expires',
+            cell: ({ row }) => <span className="text-xs">{getRelativeTime(row.original.expires_at)}</span>
+        },
+        {
+            id: 'actions',
+            header: 'Actions',
+            cell: ({ row }) => (
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => handleResendInvite(row.original.id)}
+                        className="p-1 px-2 text-[10px] bg-brand-primary/10 text-brand-primary rounded border border-brand-primary/30 hover:bg-brand-primary/20 transition-colors uppercase font-bold"
+                    >
+                        Resend
+                    </button>
+                    <button
+                        onClick={() => handleRevokeInvite(row.original.id)}
+                        className="p-1 px-2 text-[10px] bg-red-500/10 text-red-500 rounded border border-red-500/30 hover:bg-red-500/20 transition-colors uppercase font-bold"
+                    >
+                        Revoke
+                    </button>
+                </div>
+            )
+        }
+    ];
 
     // Render
     return (
@@ -744,6 +941,40 @@ export function UsersPage() {
                     })}
                 </div>
             )}
+
+            {/* Tab Switcher */}
+            <div className="flex items-center gap-1 p-1 bg-darker rounded-xl border border-border-muted w-fit mt-2">
+                <button
+                    onClick={() => setActiveTab('users')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'users'
+                        ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20'
+                        : 'text-muted hover:text-primary hover:bg-white/5'
+                        }`}
+                >
+                    <div className="flex items-center gap-2">
+                        <Users className="w-4 h-4" />
+                        Users
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${activeTab === 'users' ? 'bg-white/20' : 'bg-white/5'}`}>
+                            {users.length}
+                        </span>
+                    </div>
+                </button>
+                <button
+                    onClick={() => setActiveTab('invitations')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'invitations'
+                        ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20'
+                        : 'text-muted hover:text-primary hover:bg-white/5'
+                        }`}
+                >
+                    <div className="flex items-center gap-2">
+                        <Mail className="w-4 h-4" />
+                        Pending Invitations
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${activeTab === 'invitations' ? 'bg-white/20' : 'bg-white/5'}`}>
+                            {invitations.length}
+                        </span>
+                    </div>
+                </button>
+            </div>
 
             {/* Filters (Dynamic Config-Driven) */}
             {(() => {
@@ -938,10 +1169,10 @@ export function UsersPage() {
 
             {/* Data Table */}
             <DataTable
-                data={paginatedUsers}
-                columns={columns}
+                data={(activeTab === 'users' ? paginatedUsers : invitations) as any[]}
+                columns={(activeTab === 'users' ? columns : invitationColumns) as any[]}
                 isLoading={isLoading}
-                onDelete={handleDelete}
+                onDelete={activeTab === 'users' ? handleDelete : undefined}
             />
 
             {/* Pagination Controls (Config-Driven) */}
@@ -1046,9 +1277,19 @@ function UserDetails({ user, roles, onEdit, onStatusChange, showToast }: {
     onStatusChange: (user: User, status: User['status']) => void;
     showToast: (message: string, type: 'success' | 'error' | 'info') => void;
 }) {
+    const [activeTab, setActiveTab] = useState<'profile' | 'activity'>('profile');
+
+    // Mock activities for now
+    const activities = [
+        { id: 1, action: 'User logged in', timestamp: Math.floor(Date.now() / 1000) - 3600, icon: Key, color: 'text-blue-400' },
+        { id: 2, action: 'Updated profile information', timestamp: Math.floor(Date.now() / 1000) - 86400, icon: Edit2, color: 'text-emerald-400' },
+        { id: 3, action: 'Password changed', timestamp: Math.floor(Date.now() / 1000) - 259200, icon: Shield, color: 'text-orange-400' },
+        { id: 4, action: 'Joined via manual invitation', timestamp: user.created_at, icon: Mail, color: 'text-brand-primary' },
+    ];
+
     return (
-        <div className="space-y-6">
-            <div className="flex items-center gap-4">
+        <div className="flex flex-col h-full">
+            <div className="flex items-center gap-4 mb-6">
                 <div className="w-16 h-16 rounded-full bg-gradient-to-br from-brand-primary to-brand-secondary flex items-center justify-center text-white text-xl font-bold">
                     {user.first_name?.[0]}{user.last_name?.[0]}
                 </div>
@@ -1062,58 +1303,101 @@ function UserDetails({ user, roles, onEdit, onStatusChange, showToast }: {
                 </div>
             </div>
 
-            <div className="space-y-3 pb-6">
-                <div className="flex justify-between py-2 border-b border-border-muted">
-                    <span className="text-muted text-sm">Username</span>
-                    <span className="text-sm font-mono">{user.username}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-border-muted">
-                    <span className="text-muted text-sm">Last Login</span>
-                    <span className="text-sm">{user.last_login_at ? new Date(user.last_login_at * 1000).toLocaleString() : 'Never'}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-border-muted">
-                    <span className="text-muted text-sm">Created</span>
-                    <span className="text-sm">{new Date(user.created_at * 1000).toLocaleDateString()}</span>
-                </div>
-                {user.updated_at && (
-                    <div className="flex justify-between py-2 border-b border-border-muted">
-                        <span className="text-muted text-sm">Last Updated</span>
-                        <span className="text-sm">{new Date(user.updated_at * 1000).toLocaleDateString()}</span>
+            {/* Sub Tabs */}
+            <div className="flex border-b border-border-muted mb-6">
+                <button
+                    onClick={() => setActiveTab('profile')}
+                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'profile' ? 'border-brand-primary text-brand-primary' : 'border-transparent text-muted hover:text-primary'}`}
+                >
+                    Profile
+                </button>
+                <button
+                    onClick={() => setActiveTab('activity')}
+                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'activity' ? 'border-brand-primary text-brand-primary' : 'border-transparent text-muted hover:text-primary'}`}
+                >
+                    Activity History
+                </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto min-h-0">
+                {activeTab === 'profile' ? (
+                    <div className="space-y-6">
+                        <div className="space-y-3 pb-6 border-b border-border-muted">
+                            <div className="flex justify-between py-2">
+                                <span className="text-muted text-sm">Username</span>
+                                <span className="text-sm font-mono">{user.username}</span>
+                            </div>
+                            <div className="flex justify-between py-2">
+                                <span className="text-muted text-sm">Joined Via</span>
+                                <span className="text-sm capitalize">{user.joined_via || 'signup'}</span>
+                            </div>
+                            <div className="flex justify-between py-2">
+                                <span className="text-muted text-sm">Last Active</span>
+                                <span className="text-sm">{user.last_activity_at ? new Date(user.last_activity_at * 1000).toLocaleString() : 'Never'}</span>
+                            </div>
+                            <div className="flex justify-between py-2">
+                                <span className="text-muted text-sm">Created</span>
+                                <span className="text-sm">{new Date(user.created_at * 1000).toLocaleDateString()}</span>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="text-[10px] font-bold text-muted uppercase tracking-widest">Account Management</div>
+                            <div className="space-y-2">
+                                <button onClick={onEdit} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-brand-primary text-white rounded-lg hover:bg-brand-primary/90 transition-colors text-sm font-medium">
+                                    <Edit2 className="w-4 h-4" /> Edit User
+                                </button>
+                                <button className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-border-muted rounded-lg hover:bg-white/5 transition-colors text-sm font-medium">
+                                    <Key className="w-4 h-4" /> Reset Password
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="pt-4 border-t border-red-500/30 space-y-2">
+                            <div className="text-[10px] font-bold text-red-400 uppercase tracking-widest mb-2 opacity-70">Danger Zone</div>
+                            {user.status === 'active' ? (
+                                <button
+                                    onClick={() => {
+                                        if (user.role === 'admin' || user.role === 'super_admin') {
+                                            showToast('Administrative accounts cannot be suspended', 'error');
+                                        } else {
+                                            onStatusChange(user, 'suspended');
+                                        }
+                                    }}
+                                    className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-orange-500/50 text-orange-400 rounded-lg hover:bg-orange-500/10 transition-colors text-sm font-medium"
+                                >
+                                    <XCircle className="w-4 h-4" /> Suspend Account
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={() => onStatusChange(user, 'active')}
+                                    className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-green-500/50 text-green-400 rounded-lg hover:bg-green-500/10 transition-colors text-sm font-medium"
+                                >
+                                    <CheckCircle className="w-4 h-4" /> Activate Account
+                                </button>
+                            )}
+                        </div>
                     </div>
-                )}
-            </div>
-
-            <div className="space-y-2">
-                <button onClick={onEdit} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-brand-primary text-white rounded-lg hover:bg-brand-primary/90 transition-colors text-sm font-medium">
-                    <Edit2 className="w-4 h-4" /> Edit User
-                </button>
-                <button className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-border-muted rounded-lg hover:bg-white/5 transition-colors text-sm font-medium">
-                    <Key className="w-4 h-4" /> Reset Password
-                </button>
-            </div>
-
-            <div className="pt-4 border-t border-red-500/30 space-y-2">
-                <div className="text-[10px] font-bold text-red-400 uppercase tracking-widest mb-2 opacity-70">Danger Zone</div>
-                {user.status === 'active' ? (
-                    <button
-                        onClick={() => {
-                            if (user.role === 'admin' || user.role === 'super_admin') {
-                                showToast('Administrative accounts cannot be suspended', 'error');
-                            } else {
-                                onStatusChange(user, 'suspended');
-                            }
-                        }}
-                        className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-orange-500/50 text-orange-400 rounded-lg hover:bg-orange-500/10 transition-colors text-sm font-medium"
-                    >
-                        <XCircle className="w-4 h-4" /> Suspend Account
-                    </button>
                 ) : (
-                    <button
-                        onClick={() => onStatusChange(user, 'active')}
-                        className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-green-500/50 text-green-400 rounded-lg hover:bg-green-500/10 transition-colors text-sm font-medium"
-                    >
-                        <CheckCircle className="w-4 h-4" /> Activate Account
-                    </button>
+                    <div className="space-y-4">
+                        {activities.map((activity) => (
+                            <div key={activity.id} className="flex gap-4 p-3 bg-white/5 rounded-xl border border-border-muted hover:border-brand-primary/30 transition-colors group">
+                                <div className={`w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center shrink-0 ${activity.color}`}>
+                                    <activity.icon className="w-5 h-5" />
+                                </div>
+                                <div>
+                                    <div className="text-sm font-medium group-hover:text-primary transition-colors">{activity.action}</div>
+                                    <div className="text-xs text-muted mt-1 flex items-center gap-1.5">
+                                        <Clock className="w-3 h-3" />
+                                        {getRelativeTime(activity.timestamp)}
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                        <button className="w-full py-2 text-xs text-muted hover:text-brand-primary transition-colors border border-dashed border-border-muted rounded-lg mt-2 font-medium">
+                            View All Activity
+                        </button>
+                    </div>
                 )}
             </div>
         </div>

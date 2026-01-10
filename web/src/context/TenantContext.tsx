@@ -14,6 +14,7 @@ interface TenantContextType {
     activeTenant: Tenant | null;
     tenants: Tenant[];
     setActiveTenant: (tenant: Tenant) => void;
+    refresh: () => Promise<void>;
     isLoading: boolean;
 }
 
@@ -142,11 +143,16 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
         const identifier = tenant.domain || tenant.slug || tenant.id;
         const newUrl = new URL(window.location.href);
         newUrl.searchParams.set('tenant', identifier);
-        window.history.pushState({}, '', newUrl);
+    };
+
+    const refresh = async () => {
+        if (activeTenant) {
+            await setActiveTenantWithUsage(activeTenant);
+        }
     };
 
     return (
-        <TenantContext.Provider value={{ activeTenant, tenants, setActiveTenant, isLoading }}>
+        <TenantContext.Provider value={{ activeTenant, tenants, setActiveTenant, refresh, isLoading }}>
             {children}
         </TenantContext.Provider>
     );

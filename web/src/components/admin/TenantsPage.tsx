@@ -8,7 +8,8 @@ import { useTenant } from '../../context/TenantContext';
 import {
     Globe, Building2, Search, X, MoreVertical, Edit2, Pause, Trash2,
     Check, AlertCircle, Upload, Calendar, Download, Play, Archive, Copy,
-    ExternalLink, Package, Plus, ArrowUpAZ, ArrowDownZA, SortAsc, SortDesc
+    ExternalLink, Package, Plus, ArrowUpAZ, ArrowDownZA, SortAsc, SortDesc,
+    CheckCircle, XCircle
 } from 'lucide-react';
 import { apiFetch } from '../../lib/api';
 import { useToast } from '../ui/Toast';
@@ -284,6 +285,7 @@ export function TenantsPage() {
     const [uiSettings, setUiSettings] = useState<Record<string, any>>({});
     const [filters, setFilters] = useState<Record<string, any>>({});
     const [sorting, setSorting] = useState<Record<string, 'asc' | 'desc' | null>>({});
+    const [schemaColumns, setSchemaColumns] = useState<any[]>([]);
     const { activeTenant } = useTenant();
     const { showToast } = useToast();
 
@@ -332,6 +334,17 @@ export function TenantsPage() {
                 // Set default page size if available
                 if (settings['tenants.ui.defaultPageSize']) {
                     setPageSize(parseInt(settings['tenants.ui.defaultPageSize']));
+                }
+
+                // Fetch schema for dynamic columns
+                try {
+                    const schemaRes = await apiFetch('/api/v1/schema/tenants');
+                    if (schemaRes.ok) {
+                        const schemaData = await schemaRes.json();
+                        setSchemaColumns(schemaData.columns || []);
+                    }
+                } catch (err) {
+                    console.error('Failed to fetch schema', err);
                 }
             } catch (err) {
                 console.error('Failed to load settings', err);
@@ -806,11 +819,44 @@ export function TenantsPage() {
     ];
 
     // Filter columns based on settings
-    const columns = allColumns.filter(col => {
-        if (col.id === 'quickActions') return true; // Always show actions
+    const baseColumns = [...allColumns];
+    schemaColumns.forEach(sc => {
+        const pascalName = sc.name.split('_').map((word: string) => word.charAt(0).toUpperCase() + word.slice(1)).join('');
+        const showKey = `tenants.ui.columns.show${pascalName}`;
+
+        // Check if this DB field is already covered by a hardcoded column
+        const isCovered = allColumns.some(col =>
+            (col as any).showSetting === showKey ||
+            (col as any).accessorKey === sc.name
+        );
+
+        if (!isCovered) {
+            const label = sc.name.split('_').map((word: string) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+            baseColumns.push({
+                id: sc.name,
+                accessorKey: sc.name,
+                header: label,
+                cell: ({ row }: { row: any }) => {
+                    const val = row.original[sc.name as keyof Tenant];
+                    if (val === null || val === undefined) return <span className="text-muted">—</span>;
+                    if (typeof val === 'number' && (sc.name.endsWith('_at') || sc.name === 'created_at' || sc.name === 'updated_at')) {
+                        return <span className="text-sm">{new Date(val * 1000).toLocaleDateString()}</span>;
+                    }
+                    if (typeof val === 'boolean') {
+                        return val ? <CheckCircle className="w-4 h-4 text-green-500" /> : <XCircle className="w-4 h-4 text-red-500" />;
+                    }
+                    return <span className="text-sm">{String(val)}</span>;
+                },
+                showSetting: showKey
+            } as any);
+        }
+    });
+
+    const columns = baseColumns.filter(col => {
+        if (col.id === 'quickActions' || col.id === 'actions') return true;
         const settingKey = (col as any).showSetting;
-        if (!settingKey) return true; // Show by default if no setting
-        return visibleColumns[settingKey] !== false; // Show if setting is true or not set (default true)
+        if (!settingKey) return true;
+        return visibleColumns[settingKey] !== false;
     });
 
     // Render

@@ -23,6 +23,9 @@ export interface ModuleConfig {
     /** Whether this is a core/foundation module */
     isCore: boolean;
 
+    /** Database tables associated with this module */
+    tables?: string[];
+
     /** Whether this is infrastructure (not shown in modules marketplace) */
     isInfrastructure?: boolean;
 
@@ -37,6 +40,15 @@ export interface ModuleConfig {
 
     /** Register Hono routes for this module */
     routes: (app: Hono<any>) => void;
+
+    /** Static list of API routes for documentation/UI */
+    apiRoutes?: ModuleApiRoute[];
+
+    /** Static list of frontend routes for documentation/UI */
+    frontendRoutes?: ModuleRoute[];
+
+    /** Static list of admin routes for documentation/UI */
+    adminRoutes?: ModuleRoute[];
 
     /** Admin sidebar menu configuration */
     menu: ModuleMenuItem;
@@ -126,6 +138,23 @@ export interface ModuleRoute {
 
     /** Exact match only */
     exact?: boolean;
+}
+
+/**
+ * API route configuration for documentation
+ */
+export interface ModuleApiRoute {
+    /** HTTP Method */
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+
+    /** Route path (e.g. /api/v1/users) */
+    path: string;
+
+    /** Description of what this route does */
+    description: string;
+
+    /** Permission required to access */
+    requiredPermission?: string;
 }
 
 /**

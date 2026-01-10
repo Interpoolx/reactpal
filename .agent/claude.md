@@ -24,6 +24,11 @@ This file contains strict instructions for AI agents to maintain codebase stabil
 - **Instruction**: Check `backend/wrangler.toml` for the correct environment variable names (`DB`, `TENANT_MANIFESTS`, etc.).
 - **Action**: Check `db/migrations/` to see the actual column names before writing SQL queries.
 
+### 5. Module-Table Mapping
+**Scenario**: New tables are created but don't show up in module settings.
+- **Instruction**: Always add associated database tables to the `tables` array in `module.config.ts`.
+- **Action**: Check `db/migrations/` for newly created tables and map them to the corresponding module in `packages/modules-*/src/module.config.ts`.
+
 ## 🚀 Architectural Source of Truth
 - **Module Registration**: `packages/core-registry`
 - **Tenant Context**: `TenantContext.tsx` and `tenant-resolver.ts` middleware.

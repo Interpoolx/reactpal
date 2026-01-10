@@ -10,6 +10,31 @@ export function registerUsersRoutes(app: Hono<any>): void {
     const roles = new Hono<{ Bindings: any; Variables: any }>();
     const invitations = new Hono<{ Bindings: any; Variables: any }>();
 
+    const checkUserLimit = async (db: any, tenantId: string) => {
+        const tenant = await db.prepare('SELECT max_users FROM tenants WHERE id = ?').bind(tenantId).first();
+        if (!tenant) return { allowed: true };
+
+        const maxUsers = (tenant as any).max_users || 0;
+        if (maxUsers <= 0) return { allowed: true };
+
+        const usersCount = await db.prepare('SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND status != ?').bind(tenantId, 'archived').first();
+        const activeUsersCount = (usersCount as any).count || 0;
+
+        const invitesCount = await db.prepare('SELECT COUNT(*) as count FROM invitations WHERE tenant_id = ? AND status = ?').bind(tenantId, 'pending').first();
+        const pendingInvitesCount = (invitesCount as any).count || 0;
+
+        if (activeUsersCount + pendingInvitesCount >= maxUsers) {
+            return {
+                allowed: false,
+                current: activeUsersCount + pendingInvitesCount,
+                max: maxUsers,
+                error: 'User limit reached. Please upgrade your plan.'
+            };
+        }
+
+        return { allowed: true };
+    };
+
     // ============================================================================
     // USER ROUTES - /api/v1/users
     // ============================================================================
@@ -96,12 +121,18 @@ export function registerUsersRoutes(app: Hono<any>): void {
         const now = Math.floor(Date.now() / 1000);
 
         try {
-            await db.prepare(`
-        INSERT INTO users (id, tenant_id, username, email, password, first_name, last_name, role, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-      `).bind(id, tenantId || 'default', username, email, password, firstName, lastName, role, now).run();
+            // Check Limits
+            const limitCheck = await checkUserLimit(db, tenantId || 'default');
+            if (!limitCheck.allowed) {
+                return c.json({ error: limitCheck.error }, 403);
+            }
 
-            return c.json({ id, username, email, role, status: 'active', created_at: now }, 201);
+            await db.prepare(`
+        INSERT INTO users (id, tenant_id, username, email, password, first_name, last_name, role, status, joined_via, created_at, last_activity_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+      `).bind(id, tenantId || 'default', username, email, password, firstName, lastName, role, 'manual', now, now).run();
+
+            return c.json({ id, username, email, role, status: 'active', joined_via: 'manual', created_at: now }, 201);
         } catch (error: any) {
             if (error.message?.includes('UNIQUE constraint failed')) {
                 return c.json({ error: 'Username or email already exists' }, 409);
@@ -331,14 +362,89 @@ export function registerUsersRoutes(app: Hono<any>): void {
      * GET /api/v1/permissions
      * List all available permissions grouped by module
      */
-    permissions.get('/', (c) => {
+    permissions.get('/', async (c) => {
+        const db = c.env.DB;
         const modules = moduleRegistry.getAll();
-        const allPermissions = modules.map(m => ({
-            moduleId: m.id,
-            moduleName: m.name,
-            permissions: m.permissions || []
-        })).filter(m => m.permissions.length > 0);
-        return c.json(allPermissions);
+
+        // Map code-based permissions
+        const modulePermsMap: Record<string, { moduleId: string; moduleName: string; permissions: string[] }> = {};
+
+        modules.forEach(m => {
+            if (m.permissions && m.permissions.length > 0) {
+                modulePermsMap[m.id] = {
+                    moduleId: m.id,
+                    moduleName: m.name,
+                    permissions: [...m.permissions]
+                };
+            }
+        });
+
+        try {
+            // Fetch custom permissions from DB
+            const results = await db.prepare('SELECT id, module_id, slug FROM permissions').all();
+            const dbPermissions = results.results || [];
+
+            dbPermissions.forEach((p: any) => {
+                const mod = modulePermsMap[p.module_id];
+                if (mod) {
+                    if (!mod.permissions.includes(p.slug)) {
+                        mod.permissions.push(p.slug);
+                    }
+                } else {
+                    // Module might not be in registry (future module or removed?)
+                    // Still show it as a category
+                    modulePermsMap[p.module_id] = {
+                        moduleId: p.module_id,
+                        moduleName: p.module_id.charAt(0).toUpperCase() + p.module_id.slice(1),
+                        permissions: [p.slug]
+                    };
+                }
+            });
+        } catch (error) {
+            console.error('Error fetching DB permissions:', error);
+        }
+
+        return c.json(Object.values(modulePermsMap));
+    });
+
+    permissions.post('/', async (c) => {
+        const db = c.env.DB;
+        const { moduleId, slug, name, description } = await c.req.json();
+
+        if (!moduleId || !slug) {
+            return c.json({ error: 'Module ID and slug are required' }, 400);
+        }
+
+        const id = `${moduleId}.${slug}`;
+        const finalName = name || slug.charAt(0).toUpperCase() + slug.slice(1);
+
+        try {
+            await db.prepare('INSERT INTO permissions (id, module_id, name, slug, description) VALUES (?, ?, ?, ?, ?)')
+                .bind(id, moduleId, finalName, slug, description || '')
+                .run();
+            return c.json({ success: true, id });
+        } catch (error: any) {
+            if (error.message?.includes('UNIQUE constraint failed')) {
+                return c.json({ error: 'Permission already exists' }, 409);
+            }
+            return c.json({ error: 'Failed to add permission', message: error.message }, 500);
+        }
+    });
+
+    permissions.delete('/:moduleId/:slug', async (c) => {
+        const db = c.env.DB;
+        const moduleId = c.req.param('moduleId');
+        const slug = c.req.param('slug');
+
+        try {
+            await db.prepare('DELETE FROM permissions WHERE module_id = ? AND slug = ?')
+                .bind(moduleId, slug)
+                .run();
+            // Note: We don't delete code-based permissions, just custom ones in DB.
+            return c.json({ success: true });
+        } catch (error: any) {
+            return c.json({ error: 'Failed to delete permission', message: error.message }, 500);
+        }
     });
 
     // ============================================================================
@@ -354,15 +460,20 @@ export function registerUsersRoutes(app: Hono<any>): void {
         const tenantId = c.req.query('tenantId');
 
         try {
-            let query = 'SELECT id, name, slug, description, is_system, created_at, tenant_id FROM roles';
+            let query = `
+                SELECT 
+                    r.id, r.name, r.slug, r.description, r.is_system, r.created_at, r.tenant_id,
+                    (SELECT COUNT(*) FROM users u WHERE u.role = r.slug) as user_count
+                FROM roles r
+            `;
             const params: any[] = [];
 
             if (tenantId) {
-                query += ' WHERE tenant_id = ? OR is_system = 1';
+                query += ' WHERE r.tenant_id = ? OR r.is_system = 1';
                 params.push(tenantId);
             }
 
-            query += ' ORDER BY is_system DESC, name ASC';
+            query += ' ORDER BY r.is_system DESC, r.name ASC';
 
             const results = await db.prepare(query).bind(...params).all();
             return c.json(results.results || []);
@@ -574,22 +685,9 @@ export function registerUsersRoutes(app: Hono<any>): void {
 
         try {
             // Check Limits
-            const tenant = await db.prepare('SELECT max_users FROM tenants WHERE id = ?').bind(tenantId).first();
-            if (tenant) {
-                const maxUsers = (tenant as any).max_users || 0;
-                if (maxUsers > 0) {
-                    // Count active users
-                    const usersCount = await db.prepare('SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND status != ?').bind(tenantId, 'archived').first();
-                    const activeUsers = (usersCount as any).count || 0;
-
-                    // Count pending invitations
-                    const invitesCount = await db.prepare('SELECT COUNT(*) as count FROM invitations WHERE tenant_id = ? AND status = ?').bind(tenantId, 'pending').first();
-                    const pendingInvites = (invitesCount as any).count || 0;
-
-                    if (activeUsers + pendingInvites >= maxUsers) {
-                        return c.json({ error: 'User limit reached. Please upgrade your plan.' }, 403);
-                    }
-                }
+            const limitCheck = await checkUserLimit(db, tenantId || 'default');
+            if (!limitCheck.allowed) {
+                return c.json({ error: limitCheck.error }, 403);
             }
 
             await db.prepare(`

@@ -1236,7 +1236,21 @@ const PERMISSIONS = {
   'admin:view_as': 'View as other roles',
   'admin:impersonate': 'Impersonate users',
 } as const;
-```
+
+### Required Feature Groups
+
+Every module MUST organize settings into these standard groups (tabs):
+
+| Group | Purpose | Examples |
+|-------|---------|----------|
+| **General** | Core logic & policies | `allowGuestAccess`, `defaultRole`, `maxUsers` |
+| **Admin UI** | Toggle Admin Panel features | `showStatsCards`, `showSearch`, `showExport` |
+| **Frontend UI** | Toggle App/Public features | `requireEmailVerification`, `loginPageTitle`, `showPublicDirectory` |
+| **Permissions** | (Auto-generated) | List of permissions |
+| **Tables** | (Auto-generated) | Database schema view |
+| **Routes** | (Auto-generated) | API/Route map |
+
+> **Note**: Even if a group is empty (e.g., no Frontend UI settings yet), the tab will appear with a "No settings found" message to maintain consistency across modules.
 
 ### 2. Built-in Roles
 

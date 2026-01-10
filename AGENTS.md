@@ -49,6 +49,18 @@ export const myModuleConfig: ModuleConfig = {
     description: '...',
     isCore: false, // Set to true ONLY for foundation modules
     routes: (app) => { /* mount your routes here */ },
+    
+    // Route Documentation (MANDATORY)
+    apiRoutes: [
+        { method: 'GET', path: '/api/v1/my-feature', description: 'List items' }
+    ],
+    adminRoutes: [
+        { path: '/hpanel/my-feature', component: 'MyFeaturePage' }
+    ],
+    frontendRoutes: [
+        { path: '/my-feature', component: 'MyFeaturePublicPage' }
+    ],
+
     menu: { label: 'My Feature', icon: 'Box', href: '/hpanel/my-feature', order: 50 },
     availability: { defaultEnabled: false, availableForTenants: true }
 };

@@ -1,6 +1,3 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-
 interface Migration {
     id: string;
     name: string;
@@ -17,9 +14,17 @@ export class MigrationLoader {
     private manifest: MigrationManifest | null = null;
 
     constructor() {
-        // Try to load mirrored manifest (copied during npm run db:manifest)
+        // Try to load mirrored manifest (bundled during build)
         try {
-            // @ts-ignore - This file is generated dynamically
+            // @ts-ignore - This file is generated dynamically or bundled
+            // In ESM/Workers, we might need a different strategy, but if bundler handles require or import:
+            // For now, let's try to retain the logic but maybe avoid require if it fails in browser
+            // implementation details depend on the bundler.
+            // Provided code used require, assuming it works or throws.
+            // Leaving as is, but wrapping in safe block if needed.
+            // Note: In pure ESM workers, require is not defined. 
+            // We'll skip this change for now as the error was specifically node:fs.
+            // @ts-ignore
             this.manifest = require('./migrations-manifest.json');
             console.log(`[MigrationLoader] Loaded manifest with ${this.manifest?.migrations.length} files`);
         } catch (e) {
@@ -45,7 +50,7 @@ export class MigrationLoader {
 
         // Fallback to FS only if not in production and manifest is empty
         if (!this.isProduction) {
-            return this.listFromFilesystem();
+            return await this.listFromFilesystem();
         }
 
         return [];
@@ -60,6 +65,9 @@ export class MigrationLoader {
         }
 
         try {
+            const fs = await import('node:fs');
+            const path = await import('node:path');
+
             const possiblePaths = [
                 path.join(process.cwd(), 'db', 'migrations', filename),
                 path.join(process.cwd(), '..', 'db', 'migrations', filename),
@@ -83,30 +91,38 @@ export class MigrationLoader {
     /**
      * List migrations from filesystem (local development)
      */
-    private listFromFilesystem(): Migration[] {
-        const possiblePaths = [
-            path.join(process.cwd(), 'db', 'migrations'),
-            path.join(process.cwd(), '..', 'db', 'migrations'),
-            path.join(process.cwd(), 'backend', 'db', 'migrations'),
-        ];
+    private async listFromFilesystem(): Promise<Migration[]> {
+        try {
+            const fs = await import('node:fs');
+            const path = await import('node:path');
 
-        for (const migrationsPath of possiblePaths) {
-            if (fs.existsSync(migrationsPath)) {
-                console.log(`[MigrationLoader] Found migrations at: ${migrationsPath}`);
+            const possiblePaths = [
+                path.join(process.cwd(), 'db', 'migrations'),
+                path.join(process.cwd(), '..', 'db', 'migrations'),
+                path.join(process.cwd(), 'backend', 'db', 'migrations'),
+            ];
 
-                const files = fs.readdirSync(migrationsPath)
-                    .filter(f => f.endsWith('.sql'))
-                    .sort();
+            for (const migrationsPath of possiblePaths) {
+                if (fs.existsSync(migrationsPath)) {
+                    console.log(`[MigrationLoader] Found migrations at: ${migrationsPath}`);
 
-                return files.map(name => ({
-                    id: this.extractId(name),
-                    name: name
-                }));
+                    const files = fs.readdirSync(migrationsPath)
+                        .filter(f => f.endsWith('.sql'))
+                        .sort();
+
+                    return files.map(name => ({
+                        id: this.extractId(name),
+                        name: name
+                    }));
+                }
             }
-        }
 
-        console.warn(`[MigrationLoader] No migrations directory found. Checked: ${possiblePaths.join(', ')}`);
-        return [];
+            console.warn(`[MigrationLoader] No migrations directory found. Checked: ${possiblePaths.join(', ')}`);
+            return [];
+        } catch (e) {
+            console.error('Failed to list migrations from filesystem:', e);
+            return [];
+        }
     }
 
     /**
@@ -132,7 +148,10 @@ export class MigrationLoader {
     /**
      * Generate manifest file (for build scripts)
      */
-    static generateManifest(outputPath: string): void {
+    static async generateManifest(outputPath: string): Promise<void> {
+        const fs = await import('node:fs');
+        const path = await import('node:path');
+
         const migrationsDir = path.join(process.cwd(), 'db', 'migrations');
 
         if (!fs.existsSync(migrationsDir)) {

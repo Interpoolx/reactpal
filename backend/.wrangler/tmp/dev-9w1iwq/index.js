@@ -47,6 +47,12 @@ function notImplemented(name) {
   }, "fn");
   return Object.assign(fn, { __unenv__: true });
 }
+function notImplementedAsync(name) {
+  const fn = notImplemented(name);
+  fn.__promisify__ = () => notImplemented(name + ".__promisify__");
+  fn.native = fn;
+  return fn;
+}
 function notImplementedClass(name) {
   return class {
     __unenv__ = true;
@@ -64,6 +70,7 @@ var init_utils = __esm({
     init_performance2();
     __name(createNotImplementedError, "createNotImplementedError");
     __name(notImplemented, "notImplemented");
+    __name(notImplementedAsync, "notImplementedAsync");
     __name(notImplementedClass, "notImplementedClass");
   }
 });
@@ -1242,26 +1249,26 @@ var init_url = __esm({
     init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
     init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
     init_performance2();
-    splitPath = /* @__PURE__ */ __name((path2) => {
-      const paths = path2.split("/");
+    splitPath = /* @__PURE__ */ __name((path) => {
+      const paths = path.split("/");
       if (paths[0] === "") {
         paths.shift();
       }
       return paths;
     }, "splitPath");
     splitRoutingPath = /* @__PURE__ */ __name((routePath) => {
-      const { groups, path: path2 } = extractGroupsFromPath(routePath);
-      const paths = splitPath(path2);
+      const { groups, path } = extractGroupsFromPath(routePath);
+      const paths = splitPath(path);
       return replaceGroupMarks(paths, groups);
     }, "splitRoutingPath");
-    extractGroupsFromPath = /* @__PURE__ */ __name((path2) => {
+    extractGroupsFromPath = /* @__PURE__ */ __name((path) => {
       const groups = [];
-      path2 = path2.replace(/\{[^}]+\}/g, (match2, index) => {
+      path = path.replace(/\{[^}]+\}/g, (match2, index) => {
         const mark = `@${index}`;
         groups.push([mark, match2]);
         return mark;
       });
-      return { groups, path: path2 };
+      return { groups, path };
     }, "extractGroupsFromPath");
     replaceGroupMarks = /* @__PURE__ */ __name((paths, groups) => {
       for (let i = groups.length - 1; i >= 0; i--) {
@@ -1316,8 +1323,8 @@ var init_url = __esm({
         const charCode = url.charCodeAt(i);
         if (charCode === 37) {
           const queryIndex = url.indexOf("?", i);
-          const path2 = url.slice(start, queryIndex === -1 ? void 0 : queryIndex);
-          return tryDecodeURI(path2.includes("%25") ? path2.replace(/%25/g, "%2525") : path2);
+          const path = url.slice(start, queryIndex === -1 ? void 0 : queryIndex);
+          return tryDecodeURI(path.includes("%25") ? path.replace(/%25/g, "%2525") : path);
         } else if (charCode === 63) {
           break;
         }
@@ -1334,11 +1341,11 @@ var init_url = __esm({
       }
       return `${base?.[0] === "/" ? "" : "/"}${base}${sub === "/" ? "" : `${base?.at(-1) === "/" ? "" : "/"}${sub?.[0] === "/" ? sub.slice(1) : sub}`}`;
     }, "mergePath");
-    checkOptionalParameter = /* @__PURE__ */ __name((path2) => {
-      if (path2.charCodeAt(path2.length - 1) !== 63 || !path2.includes(":")) {
+    checkOptionalParameter = /* @__PURE__ */ __name((path) => {
+      if (path.charCodeAt(path.length - 1) !== 63 || !path.includes(":")) {
         return null;
       }
-      const segments = path2.split("/");
+      const segments = path.split("/");
       const results = [];
       let basePath = "";
       segments.forEach((segment) => {
@@ -1493,9 +1500,9 @@ var init_request = __esm({
        */
       path;
       bodyCache = {};
-      constructor(request, path2 = "/", matchResult = [[]]) {
+      constructor(request, path = "/", matchResult = [[]]) {
         this.raw = request;
-        this.path = path2;
+        this.path = path;
         this.#matchResult = matchResult;
         this.#validatedData = {};
       }
@@ -2288,8 +2295,8 @@ var init_hono_base = __esm({
             return this;
           };
         });
-        this.on = (method, path2, ...handlers) => {
-          for (const p of [path2].flat()) {
+        this.on = (method, path, ...handlers) => {
+          for (const p of [path].flat()) {
             this.#path = p;
             for (const m of [method].flat()) {
               handlers.map((handler) => {
@@ -2346,8 +2353,8 @@ var init_hono_base = __esm({
        * app.route("/api", app2) // GET /api/user
        * ```
        */
-      route(path2, app2) {
-        const subApp = this.basePath(path2);
+      route(path, app2) {
+        const subApp = this.basePath(path);
         app2.routes.map((r) => {
           let handler;
           if (app2.errorHandler === errorHandler) {
@@ -2373,9 +2380,9 @@ var init_hono_base = __esm({
        * const api = new Hono().basePath('/api')
        * ```
        */
-      basePath(path2) {
+      basePath(path) {
         const subApp = this.#clone();
-        subApp._basePath = mergePath(this._basePath, path2);
+        subApp._basePath = mergePath(this._basePath, path);
         return subApp;
       }
       /**
@@ -2449,7 +2456,7 @@ var init_hono_base = __esm({
        * })
        * ```
        */
-      mount(path2, applicationHandler, options) {
+      mount(path, applicationHandler, options) {
         let replaceRequest;
         let optionHandler;
         if (options) {
@@ -2476,7 +2483,7 @@ var init_hono_base = __esm({
           return [c.env, executionContext];
         };
         replaceRequest ||= (() => {
-          const mergedPath = mergePath(this._basePath, path2);
+          const mergedPath = mergePath(this._basePath, path);
           const pathPrefixLength = mergedPath === "/" ? 0 : mergedPath.length;
           return (request) => {
             const url = new URL(request.url);
@@ -2491,14 +2498,14 @@ var init_hono_base = __esm({
           }
           await next();
         }, "handler");
-        this.#addRoute(METHOD_NAME_ALL, mergePath(path2, "*"), handler);
+        this.#addRoute(METHOD_NAME_ALL, mergePath(path, "*"), handler);
         return this;
       }
-      #addRoute(method, path2, handler) {
+      #addRoute(method, path, handler) {
         method = method.toUpperCase();
-        path2 = mergePath(this._basePath, path2);
-        const r = { basePath: this._basePath, path: path2, method, handler };
-        this.router.add(method, path2, [handler, r]);
+        path = mergePath(this._basePath, path);
+        const r = { basePath: this._basePath, path, method, handler };
+        this.router.add(method, path, [handler, r]);
         this.routes.push(r);
       }
       #handleError(err, c) {
@@ -2511,10 +2518,10 @@ var init_hono_base = __esm({
         if (method === "HEAD") {
           return (async () => new Response(null, await this.#dispatch(request, executionCtx, env2, "GET")))();
         }
-        const path2 = this.getPath(request, { env: env2 });
-        const matchResult = this.router.match(method, path2);
+        const path = this.getPath(request, { env: env2 });
+        const matchResult = this.router.match(method, path);
         const c = new Context(request, {
-          path: path2,
+          path,
           matchResult,
           env: env2,
           executionCtx,
@@ -2615,15 +2622,15 @@ var init_hono_base = __esm({
 });
 
 // ../node_modules/hono/dist/router/reg-exp-router/matcher.js
-function match(method, path2) {
+function match(method, path) {
   const matchers = this.buildAllMatchers();
-  const match2 = /* @__PURE__ */ __name((method2, path22) => {
+  const match2 = /* @__PURE__ */ __name((method2, path2) => {
     const matcher = matchers[method2] || matchers[METHOD_NAME_ALL];
-    const staticMatch = matcher[2][path22];
+    const staticMatch = matcher[2][path2];
     if (staticMatch) {
       return staticMatch;
     }
-    const match3 = path22.match(matcher[0]);
+    const match3 = path2.match(matcher[0]);
     if (!match3) {
       return [[], emptyParam];
     }
@@ -2631,7 +2638,7 @@ function match(method, path2) {
     return [matcher[1][index], match3];
   }, "match2");
   this.match = match2;
-  return match2(method, path2);
+  return match2(method, path);
 }
 var emptyParam;
 var init_matcher = __esm({
@@ -2779,12 +2786,12 @@ var init_trie = __esm({
     Trie = /* @__PURE__ */ __name(class {
       #context = { varIndex: 0 };
       #root = new Node();
-      insert(path2, index, pathErrorCheckOnly) {
+      insert(path, index, pathErrorCheckOnly) {
         const paramAssoc = [];
         const groups = [];
         for (let i = 0; ; ) {
           let replaced = false;
-          path2 = path2.replace(/\{[^}]+\}/g, (m) => {
+          path = path.replace(/\{[^}]+\}/g, (m) => {
             const mark = `@\\${i}`;
             groups[i] = [mark, m];
             i++;
@@ -2795,7 +2802,7 @@ var init_trie = __esm({
             break;
           }
         }
-        const tokens = path2.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
+        const tokens = path.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
         for (let i = groups.length - 1; i >= 0; i--) {
           const [mark] = groups[i];
           for (let j = tokens.length - 1; j >= 0; j--) {
@@ -2834,9 +2841,9 @@ var init_trie = __esm({
 });
 
 // ../node_modules/hono/dist/router/reg-exp-router/router.js
-function buildWildcardRegExp(path2) {
-  return wildcardRegExpCache[path2] ??= new RegExp(
-    path2 === "*" ? "" : `^${path2.replace(
+function buildWildcardRegExp(path) {
+  return wildcardRegExpCache[path] ??= new RegExp(
+    path === "*" ? "" : `^${path.replace(
       /\/\*$|([.\\+*[^\]$()])/g,
       (_, metaChar) => metaChar ? `\\${metaChar}` : "(?:|/.*)"
     )}$`
@@ -2858,17 +2865,17 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   );
   const staticMap = /* @__PURE__ */ Object.create(null);
   for (let i = 0, j = -1, len = routesWithStaticPathFlag.length; i < len; i++) {
-    const [pathErrorCheckOnly, path2, handlers] = routesWithStaticPathFlag[i];
+    const [pathErrorCheckOnly, path, handlers] = routesWithStaticPathFlag[i];
     if (pathErrorCheckOnly) {
-      staticMap[path2] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
+      staticMap[path] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
     } else {
       j++;
     }
     let paramAssoc;
     try {
-      paramAssoc = trie.insert(path2, j, pathErrorCheckOnly);
+      paramAssoc = trie.insert(path, j, pathErrorCheckOnly);
     } catch (e) {
-      throw e === PATH_ERROR ? new UnsupportedPathError(path2) : e;
+      throw e === PATH_ERROR ? new UnsupportedPathError(path) : e;
     }
     if (pathErrorCheckOnly) {
       continue;
@@ -2902,12 +2909,12 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   }
   return [regexp, handlerMap, staticMap];
 }
-function findMiddleware(middleware, path2) {
+function findMiddleware(middleware, path) {
   if (!middleware) {
     return void 0;
   }
   for (const k of Object.keys(middleware).sort((a, b) => b.length - a.length)) {
-    if (buildWildcardRegExp(k).test(path2)) {
+    if (buildWildcardRegExp(k).test(path)) {
       return [...middleware[k]];
     }
   }
@@ -2940,7 +2947,7 @@ var init_router2 = __esm({
         this.#middleware = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
         this.#routes = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
       }
-      add(method, path2, handler) {
+      add(method, path, handler) {
         const middleware = this.#middleware;
         const routes = this.#routes;
         if (!middleware || !routes) {
@@ -2955,18 +2962,18 @@ var init_router2 = __esm({
             });
           });
         }
-        if (path2 === "/*") {
-          path2 = "*";
+        if (path === "/*") {
+          path = "*";
         }
-        const paramCount = (path2.match(/\/:/g) || []).length;
-        if (/\*$/.test(path2)) {
-          const re = buildWildcardRegExp(path2);
+        const paramCount = (path.match(/\/:/g) || []).length;
+        if (/\*$/.test(path)) {
+          const re = buildWildcardRegExp(path);
           if (method === METHOD_NAME_ALL) {
             Object.keys(middleware).forEach((m) => {
-              middleware[m][path2] ||= findMiddleware(middleware[m], path2) || findMiddleware(middleware[METHOD_NAME_ALL], path2) || [];
+              middleware[m][path] ||= findMiddleware(middleware[m], path) || findMiddleware(middleware[METHOD_NAME_ALL], path) || [];
             });
           } else {
-            middleware[method][path2] ||= findMiddleware(middleware[method], path2) || findMiddleware(middleware[METHOD_NAME_ALL], path2) || [];
+            middleware[method][path] ||= findMiddleware(middleware[method], path) || findMiddleware(middleware[METHOD_NAME_ALL], path) || [];
           }
           Object.keys(middleware).forEach((m) => {
             if (method === METHOD_NAME_ALL || method === m) {
@@ -2984,15 +2991,15 @@ var init_router2 = __esm({
           });
           return;
         }
-        const paths = checkOptionalParameter(path2) || [path2];
+        const paths = checkOptionalParameter(path) || [path];
         for (let i = 0, len = paths.length; i < len; i++) {
-          const path22 = paths[i];
+          const path2 = paths[i];
           Object.keys(routes).forEach((m) => {
             if (method === METHOD_NAME_ALL || method === m) {
-              routes[m][path22] ||= [
-                ...findMiddleware(middleware[m], path22) || findMiddleware(middleware[METHOD_NAME_ALL], path22) || []
+              routes[m][path2] ||= [
+                ...findMiddleware(middleware[m], path2) || findMiddleware(middleware[METHOD_NAME_ALL], path2) || []
               ];
-              routes[m][path22].push([handler, paramCount - len + i + 1]);
+              routes[m][path2].push([handler, paramCount - len + i + 1]);
             }
           });
         }
@@ -3011,13 +3018,13 @@ var init_router2 = __esm({
         const routes = [];
         let hasOwnRoute = method === METHOD_NAME_ALL;
         [this.#middleware, this.#routes].forEach((r) => {
-          const ownRoute = r[method] ? Object.keys(r[method]).map((path2) => [path2, r[method][path2]]) : [];
+          const ownRoute = r[method] ? Object.keys(r[method]).map((path) => [path, r[method][path]]) : [];
           if (ownRoute.length !== 0) {
             hasOwnRoute ||= true;
             routes.push(...ownRoute);
           } else if (method !== METHOD_NAME_ALL) {
             routes.push(
-              ...Object.keys(r[METHOD_NAME_ALL]).map((path2) => [path2, r[METHOD_NAME_ALL][path2]])
+              ...Object.keys(r[METHOD_NAME_ALL]).map((path) => [path, r[METHOD_NAME_ALL][path]])
             );
           }
         });
@@ -3075,13 +3082,13 @@ var init_router3 = __esm({
       constructor(init) {
         this.#routers = init.routers;
       }
-      add(method, path2, handler) {
+      add(method, path, handler) {
         if (!this.#routes) {
           throw new Error(MESSAGE_MATCHER_IS_ALREADY_BUILT);
         }
-        this.#routes.push([method, path2, handler]);
+        this.#routes.push([method, path, handler]);
       }
-      match(method, path2) {
+      match(method, path) {
         if (!this.#routes) {
           throw new Error("Fatal error");
         }
@@ -3096,7 +3103,7 @@ var init_router3 = __esm({
             for (let i2 = 0, len2 = routes.length; i2 < len2; i2++) {
               router.add(...routes[i2]);
             }
-            res = router.match(method, path2);
+            res = router.match(method, path);
           } catch (e) {
             if (e instanceof UnsupportedPathError) {
               continue;
@@ -3164,10 +3171,10 @@ var init_node2 = __esm({
         }
         this.#patterns = [];
       }
-      insert(method, path2, handler) {
+      insert(method, path, handler) {
         this.#order = ++this.#order;
         let curNode = this;
-        const parts = splitRoutingPath(path2);
+        const parts = splitRoutingPath(path);
         const possibleKeys = [];
         for (let i = 0, len = parts.length; i < len; i++) {
           const p = parts[i];
@@ -3218,12 +3225,12 @@ var init_node2 = __esm({
         }
         return handlerSets;
       }
-      search(method, path2) {
+      search(method, path) {
         const handlerSets = [];
         this.#params = emptyParams;
         const curNode = this;
         let curNodes = [curNode];
-        const parts = splitPath(path2);
+        const parts = splitPath(path);
         const curNodesQueue = [];
         for (let i = 0, len = parts.length; i < len; i++) {
           const part = parts[i];
@@ -3323,18 +3330,18 @@ var init_router4 = __esm({
       constructor() {
         this.#node = new Node2();
       }
-      add(method, path2, handler) {
-        const results = checkOptionalParameter(path2);
+      add(method, path, handler) {
+        const results = checkOptionalParameter(path);
         if (results) {
           for (let i = 0, len = results.length; i < len; i++) {
             this.#node.insert(method, results[i], handler);
           }
           return;
         }
-        this.#node.insert(method, path2, handler);
+        this.#node.insert(method, path, handler);
       }
-      match(method, path2) {
-        return this.#node.search(method, path2);
+      match(method, path) {
+        return this.#node.search(method, path);
       }
     }, "TrieRouter");
   }
@@ -3759,6 +3766,605 @@ var require_migrations_manifest = __commonJS({
         "004_user_schema_updates.sql"
       ],
       generated: "2026-01-10T10:06:04.402Z"
+    };
+  }
+});
+
+// ../node_modules/unenv/dist/runtime/node/internal/fs/promises.mjs
+var access, copyFile, cp, open, opendir, rename, truncate, rm, rmdir, mkdir, readdir, readlink, symlink, lstat, stat, link, unlink, chmod, lchmod, lchown, chown, utimes, lutimes, realpath, mkdtemp, writeFile, appendFile, readFile, watch, statfs, glob;
+var init_promises = __esm({
+  "../node_modules/unenv/dist/runtime/node/internal/fs/promises.mjs"() {
+    init_strip_cf_connecting_ip_header();
+    init_modules_watch_stub();
+    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
+    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
+    init_performance2();
+    init_utils();
+    access = /* @__PURE__ */ notImplemented("fs.access");
+    copyFile = /* @__PURE__ */ notImplemented("fs.copyFile");
+    cp = /* @__PURE__ */ notImplemented("fs.cp");
+    open = /* @__PURE__ */ notImplemented("fs.open");
+    opendir = /* @__PURE__ */ notImplemented("fs.opendir");
+    rename = /* @__PURE__ */ notImplemented("fs.rename");
+    truncate = /* @__PURE__ */ notImplemented("fs.truncate");
+    rm = /* @__PURE__ */ notImplemented("fs.rm");
+    rmdir = /* @__PURE__ */ notImplemented("fs.rmdir");
+    mkdir = /* @__PURE__ */ notImplemented("fs.mkdir");
+    readdir = /* @__PURE__ */ notImplemented("fs.readdir");
+    readlink = /* @__PURE__ */ notImplemented("fs.readlink");
+    symlink = /* @__PURE__ */ notImplemented("fs.symlink");
+    lstat = /* @__PURE__ */ notImplemented("fs.lstat");
+    stat = /* @__PURE__ */ notImplemented("fs.stat");
+    link = /* @__PURE__ */ notImplemented("fs.link");
+    unlink = /* @__PURE__ */ notImplemented("fs.unlink");
+    chmod = /* @__PURE__ */ notImplemented("fs.chmod");
+    lchmod = /* @__PURE__ */ notImplemented("fs.lchmod");
+    lchown = /* @__PURE__ */ notImplemented("fs.lchown");
+    chown = /* @__PURE__ */ notImplemented("fs.chown");
+    utimes = /* @__PURE__ */ notImplemented("fs.utimes");
+    lutimes = /* @__PURE__ */ notImplemented("fs.lutimes");
+    realpath = /* @__PURE__ */ notImplemented("fs.realpath");
+    mkdtemp = /* @__PURE__ */ notImplemented("fs.mkdtemp");
+    writeFile = /* @__PURE__ */ notImplemented("fs.writeFile");
+    appendFile = /* @__PURE__ */ notImplemented("fs.appendFile");
+    readFile = /* @__PURE__ */ notImplemented("fs.readFile");
+    watch = /* @__PURE__ */ notImplemented("fs.watch");
+    statfs = /* @__PURE__ */ notImplemented("fs.statfs");
+    glob = /* @__PURE__ */ notImplemented("fs.glob");
+  }
+});
+
+// ../node_modules/unenv/dist/runtime/node/internal/fs/constants.mjs
+var constants_exports = {};
+__export(constants_exports, {
+  COPYFILE_EXCL: () => COPYFILE_EXCL,
+  COPYFILE_FICLONE: () => COPYFILE_FICLONE,
+  COPYFILE_FICLONE_FORCE: () => COPYFILE_FICLONE_FORCE,
+  EXTENSIONLESS_FORMAT_JAVASCRIPT: () => EXTENSIONLESS_FORMAT_JAVASCRIPT,
+  EXTENSIONLESS_FORMAT_WASM: () => EXTENSIONLESS_FORMAT_WASM,
+  F_OK: () => F_OK,
+  O_APPEND: () => O_APPEND,
+  O_CREAT: () => O_CREAT,
+  O_DIRECT: () => O_DIRECT,
+  O_DIRECTORY: () => O_DIRECTORY,
+  O_DSYNC: () => O_DSYNC,
+  O_EXCL: () => O_EXCL,
+  O_NOATIME: () => O_NOATIME,
+  O_NOCTTY: () => O_NOCTTY,
+  O_NOFOLLOW: () => O_NOFOLLOW,
+  O_NONBLOCK: () => O_NONBLOCK,
+  O_RDONLY: () => O_RDONLY,
+  O_RDWR: () => O_RDWR,
+  O_SYNC: () => O_SYNC,
+  O_TRUNC: () => O_TRUNC,
+  O_WRONLY: () => O_WRONLY,
+  R_OK: () => R_OK,
+  S_IFBLK: () => S_IFBLK,
+  S_IFCHR: () => S_IFCHR,
+  S_IFDIR: () => S_IFDIR,
+  S_IFIFO: () => S_IFIFO,
+  S_IFLNK: () => S_IFLNK,
+  S_IFMT: () => S_IFMT,
+  S_IFREG: () => S_IFREG,
+  S_IFSOCK: () => S_IFSOCK,
+  S_IRGRP: () => S_IRGRP,
+  S_IROTH: () => S_IROTH,
+  S_IRUSR: () => S_IRUSR,
+  S_IRWXG: () => S_IRWXG,
+  S_IRWXO: () => S_IRWXO,
+  S_IRWXU: () => S_IRWXU,
+  S_IWGRP: () => S_IWGRP,
+  S_IWOTH: () => S_IWOTH,
+  S_IWUSR: () => S_IWUSR,
+  S_IXGRP: () => S_IXGRP,
+  S_IXOTH: () => S_IXOTH,
+  S_IXUSR: () => S_IXUSR,
+  UV_DIRENT_BLOCK: () => UV_DIRENT_BLOCK,
+  UV_DIRENT_CHAR: () => UV_DIRENT_CHAR,
+  UV_DIRENT_DIR: () => UV_DIRENT_DIR,
+  UV_DIRENT_FIFO: () => UV_DIRENT_FIFO,
+  UV_DIRENT_FILE: () => UV_DIRENT_FILE,
+  UV_DIRENT_LINK: () => UV_DIRENT_LINK,
+  UV_DIRENT_SOCKET: () => UV_DIRENT_SOCKET,
+  UV_DIRENT_UNKNOWN: () => UV_DIRENT_UNKNOWN,
+  UV_FS_COPYFILE_EXCL: () => UV_FS_COPYFILE_EXCL,
+  UV_FS_COPYFILE_FICLONE: () => UV_FS_COPYFILE_FICLONE,
+  UV_FS_COPYFILE_FICLONE_FORCE: () => UV_FS_COPYFILE_FICLONE_FORCE,
+  UV_FS_O_FILEMAP: () => UV_FS_O_FILEMAP,
+  UV_FS_SYMLINK_DIR: () => UV_FS_SYMLINK_DIR,
+  UV_FS_SYMLINK_JUNCTION: () => UV_FS_SYMLINK_JUNCTION,
+  W_OK: () => W_OK,
+  X_OK: () => X_OK
+});
+var UV_FS_SYMLINK_DIR, UV_FS_SYMLINK_JUNCTION, O_RDONLY, O_WRONLY, O_RDWR, UV_DIRENT_UNKNOWN, UV_DIRENT_FILE, UV_DIRENT_DIR, UV_DIRENT_LINK, UV_DIRENT_FIFO, UV_DIRENT_SOCKET, UV_DIRENT_CHAR, UV_DIRENT_BLOCK, EXTENSIONLESS_FORMAT_JAVASCRIPT, EXTENSIONLESS_FORMAT_WASM, S_IFMT, S_IFREG, S_IFDIR, S_IFCHR, S_IFBLK, S_IFIFO, S_IFLNK, S_IFSOCK, O_CREAT, O_EXCL, UV_FS_O_FILEMAP, O_NOCTTY, O_TRUNC, O_APPEND, O_DIRECTORY, O_NOATIME, O_NOFOLLOW, O_SYNC, O_DSYNC, O_DIRECT, O_NONBLOCK, S_IRWXU, S_IRUSR, S_IWUSR, S_IXUSR, S_IRWXG, S_IRGRP, S_IWGRP, S_IXGRP, S_IRWXO, S_IROTH, S_IWOTH, S_IXOTH, F_OK, R_OK, W_OK, X_OK, UV_FS_COPYFILE_EXCL, COPYFILE_EXCL, UV_FS_COPYFILE_FICLONE, COPYFILE_FICLONE, UV_FS_COPYFILE_FICLONE_FORCE, COPYFILE_FICLONE_FORCE;
+var init_constants3 = __esm({
+  "../node_modules/unenv/dist/runtime/node/internal/fs/constants.mjs"() {
+    init_strip_cf_connecting_ip_header();
+    init_modules_watch_stub();
+    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
+    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
+    init_performance2();
+    UV_FS_SYMLINK_DIR = 1;
+    UV_FS_SYMLINK_JUNCTION = 2;
+    O_RDONLY = 0;
+    O_WRONLY = 1;
+    O_RDWR = 2;
+    UV_DIRENT_UNKNOWN = 0;
+    UV_DIRENT_FILE = 1;
+    UV_DIRENT_DIR = 2;
+    UV_DIRENT_LINK = 3;
+    UV_DIRENT_FIFO = 4;
+    UV_DIRENT_SOCKET = 5;
+    UV_DIRENT_CHAR = 6;
+    UV_DIRENT_BLOCK = 7;
+    EXTENSIONLESS_FORMAT_JAVASCRIPT = 0;
+    EXTENSIONLESS_FORMAT_WASM = 1;
+    S_IFMT = 61440;
+    S_IFREG = 32768;
+    S_IFDIR = 16384;
+    S_IFCHR = 8192;
+    S_IFBLK = 24576;
+    S_IFIFO = 4096;
+    S_IFLNK = 40960;
+    S_IFSOCK = 49152;
+    O_CREAT = 64;
+    O_EXCL = 128;
+    UV_FS_O_FILEMAP = 0;
+    O_NOCTTY = 256;
+    O_TRUNC = 512;
+    O_APPEND = 1024;
+    O_DIRECTORY = 65536;
+    O_NOATIME = 262144;
+    O_NOFOLLOW = 131072;
+    O_SYNC = 1052672;
+    O_DSYNC = 4096;
+    O_DIRECT = 16384;
+    O_NONBLOCK = 2048;
+    S_IRWXU = 448;
+    S_IRUSR = 256;
+    S_IWUSR = 128;
+    S_IXUSR = 64;
+    S_IRWXG = 56;
+    S_IRGRP = 32;
+    S_IWGRP = 16;
+    S_IXGRP = 8;
+    S_IRWXO = 7;
+    S_IROTH = 4;
+    S_IWOTH = 2;
+    S_IXOTH = 1;
+    F_OK = 0;
+    R_OK = 4;
+    W_OK = 2;
+    X_OK = 1;
+    UV_FS_COPYFILE_EXCL = 1;
+    COPYFILE_EXCL = 1;
+    UV_FS_COPYFILE_FICLONE = 2;
+    COPYFILE_FICLONE = 2;
+    UV_FS_COPYFILE_FICLONE_FORCE = 4;
+    COPYFILE_FICLONE_FORCE = 4;
+  }
+});
+
+// ../node_modules/unenv/dist/runtime/node/fs/promises.mjs
+var promises_default;
+var init_promises2 = __esm({
+  "../node_modules/unenv/dist/runtime/node/fs/promises.mjs"() {
+    init_strip_cf_connecting_ip_header();
+    init_modules_watch_stub();
+    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
+    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
+    init_performance2();
+    init_promises();
+    init_constants3();
+    init_promises();
+    promises_default = {
+      constants: constants_exports,
+      access,
+      appendFile,
+      chmod,
+      chown,
+      copyFile,
+      cp,
+      glob,
+      lchmod,
+      lchown,
+      link,
+      lstat,
+      lutimes,
+      mkdir,
+      mkdtemp,
+      open,
+      opendir,
+      readFile,
+      readdir,
+      readlink,
+      realpath,
+      rename,
+      rm,
+      rmdir,
+      stat,
+      statfs,
+      symlink,
+      truncate,
+      unlink,
+      utimes,
+      watch,
+      writeFile
+    };
+  }
+});
+
+// ../node_modules/unenv/dist/runtime/node/internal/fs/classes.mjs
+var Dir, Dirent, Stats, ReadStream2, WriteStream2, FileReadStream, FileWriteStream;
+var init_classes = __esm({
+  "../node_modules/unenv/dist/runtime/node/internal/fs/classes.mjs"() {
+    init_strip_cf_connecting_ip_header();
+    init_modules_watch_stub();
+    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
+    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
+    init_performance2();
+    init_utils();
+    Dir = /* @__PURE__ */ notImplementedClass("fs.Dir");
+    Dirent = /* @__PURE__ */ notImplementedClass("fs.Dirent");
+    Stats = /* @__PURE__ */ notImplementedClass("fs.Stats");
+    ReadStream2 = /* @__PURE__ */ notImplementedClass("fs.ReadStream");
+    WriteStream2 = /* @__PURE__ */ notImplementedClass("fs.WriteStream");
+    FileReadStream = ReadStream2;
+    FileWriteStream = WriteStream2;
+  }
+});
+
+// ../node_modules/unenv/dist/runtime/node/internal/fs/fs.mjs
+function callbackify(fn) {
+  const fnc = /* @__PURE__ */ __name(function(...args) {
+    const cb = args.pop();
+    fn().catch((error3) => cb(error3)).then((val) => cb(void 0, val));
+  }, "fnc");
+  fnc.__promisify__ = fn;
+  fnc.native = fnc;
+  return fnc;
+}
+var access2, appendFile2, chown2, chmod2, copyFile2, cp2, lchown2, lchmod2, link2, lstat2, lutimes2, mkdir2, mkdtemp2, realpath2, open2, opendir2, readdir2, readFile2, readlink2, rename2, rm2, rmdir2, stat2, symlink2, truncate2, unlink2, utimes2, writeFile2, statfs2, close, createReadStream, createWriteStream, exists, fchown, fchmod, fdatasync, fstat, fsync, ftruncate, futimes, lstatSync, read, readv, realpathSync, statSync, unwatchFile, watch2, watchFile, write, writev, _toUnixTimestamp, openAsBlob, glob2, appendFileSync, accessSync, chownSync, chmodSync, closeSync, copyFileSync, cpSync, existsSync, fchownSync, fchmodSync, fdatasyncSync, fstatSync, fsyncSync, ftruncateSync, futimesSync, lchownSync, lchmodSync, linkSync, lutimesSync, mkdirSync, mkdtempSync, openSync, opendirSync, readdirSync, readSync, readvSync, readFileSync, readlinkSync, renameSync, rmSync, rmdirSync, symlinkSync, truncateSync, unlinkSync, utimesSync, writeFileSync, writeSync, writevSync, statfsSync, globSync;
+var init_fs = __esm({
+  "../node_modules/unenv/dist/runtime/node/internal/fs/fs.mjs"() {
+    init_strip_cf_connecting_ip_header();
+    init_modules_watch_stub();
+    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
+    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
+    init_performance2();
+    init_utils();
+    init_promises();
+    __name(callbackify, "callbackify");
+    access2 = callbackify(access);
+    appendFile2 = callbackify(appendFile);
+    chown2 = callbackify(chown);
+    chmod2 = callbackify(chmod);
+    copyFile2 = callbackify(copyFile);
+    cp2 = callbackify(cp);
+    lchown2 = callbackify(lchown);
+    lchmod2 = callbackify(lchmod);
+    link2 = callbackify(link);
+    lstat2 = callbackify(lstat);
+    lutimes2 = callbackify(lutimes);
+    mkdir2 = callbackify(mkdir);
+    mkdtemp2 = callbackify(mkdtemp);
+    realpath2 = callbackify(realpath);
+    open2 = callbackify(open);
+    opendir2 = callbackify(opendir);
+    readdir2 = callbackify(readdir);
+    readFile2 = callbackify(readFile);
+    readlink2 = callbackify(readlink);
+    rename2 = callbackify(rename);
+    rm2 = callbackify(rm);
+    rmdir2 = callbackify(rmdir);
+    stat2 = callbackify(stat);
+    symlink2 = callbackify(symlink);
+    truncate2 = callbackify(truncate);
+    unlink2 = callbackify(unlink);
+    utimes2 = callbackify(utimes);
+    writeFile2 = callbackify(writeFile);
+    statfs2 = callbackify(statfs);
+    close = /* @__PURE__ */ notImplementedAsync("fs.close");
+    createReadStream = /* @__PURE__ */ notImplementedAsync("fs.createReadStream");
+    createWriteStream = /* @__PURE__ */ notImplementedAsync("fs.createWriteStream");
+    exists = /* @__PURE__ */ notImplementedAsync("fs.exists");
+    fchown = /* @__PURE__ */ notImplementedAsync("fs.fchown");
+    fchmod = /* @__PURE__ */ notImplementedAsync("fs.fchmod");
+    fdatasync = /* @__PURE__ */ notImplementedAsync("fs.fdatasync");
+    fstat = /* @__PURE__ */ notImplementedAsync("fs.fstat");
+    fsync = /* @__PURE__ */ notImplementedAsync("fs.fsync");
+    ftruncate = /* @__PURE__ */ notImplementedAsync("fs.ftruncate");
+    futimes = /* @__PURE__ */ notImplementedAsync("fs.futimes");
+    lstatSync = /* @__PURE__ */ notImplementedAsync("fs.lstatSync");
+    read = /* @__PURE__ */ notImplementedAsync("fs.read");
+    readv = /* @__PURE__ */ notImplementedAsync("fs.readv");
+    realpathSync = /* @__PURE__ */ notImplementedAsync("fs.realpathSync");
+    statSync = /* @__PURE__ */ notImplementedAsync("fs.statSync");
+    unwatchFile = /* @__PURE__ */ notImplementedAsync("fs.unwatchFile");
+    watch2 = /* @__PURE__ */ notImplementedAsync("fs.watch");
+    watchFile = /* @__PURE__ */ notImplementedAsync("fs.watchFile");
+    write = /* @__PURE__ */ notImplementedAsync("fs.write");
+    writev = /* @__PURE__ */ notImplementedAsync("fs.writev");
+    _toUnixTimestamp = /* @__PURE__ */ notImplementedAsync("fs._toUnixTimestamp");
+    openAsBlob = /* @__PURE__ */ notImplementedAsync("fs.openAsBlob");
+    glob2 = /* @__PURE__ */ notImplementedAsync("fs.glob");
+    appendFileSync = /* @__PURE__ */ notImplemented("fs.appendFileSync");
+    accessSync = /* @__PURE__ */ notImplemented("fs.accessSync");
+    chownSync = /* @__PURE__ */ notImplemented("fs.chownSync");
+    chmodSync = /* @__PURE__ */ notImplemented("fs.chmodSync");
+    closeSync = /* @__PURE__ */ notImplemented("fs.closeSync");
+    copyFileSync = /* @__PURE__ */ notImplemented("fs.copyFileSync");
+    cpSync = /* @__PURE__ */ notImplemented("fs.cpSync");
+    existsSync = /* @__PURE__ */ __name(() => false, "existsSync");
+    fchownSync = /* @__PURE__ */ notImplemented("fs.fchownSync");
+    fchmodSync = /* @__PURE__ */ notImplemented("fs.fchmodSync");
+    fdatasyncSync = /* @__PURE__ */ notImplemented("fs.fdatasyncSync");
+    fstatSync = /* @__PURE__ */ notImplemented("fs.fstatSync");
+    fsyncSync = /* @__PURE__ */ notImplemented("fs.fsyncSync");
+    ftruncateSync = /* @__PURE__ */ notImplemented("fs.ftruncateSync");
+    futimesSync = /* @__PURE__ */ notImplemented("fs.futimesSync");
+    lchownSync = /* @__PURE__ */ notImplemented("fs.lchownSync");
+    lchmodSync = /* @__PURE__ */ notImplemented("fs.lchmodSync");
+    linkSync = /* @__PURE__ */ notImplemented("fs.linkSync");
+    lutimesSync = /* @__PURE__ */ notImplemented("fs.lutimesSync");
+    mkdirSync = /* @__PURE__ */ notImplemented("fs.mkdirSync");
+    mkdtempSync = /* @__PURE__ */ notImplemented("fs.mkdtempSync");
+    openSync = /* @__PURE__ */ notImplemented("fs.openSync");
+    opendirSync = /* @__PURE__ */ notImplemented("fs.opendirSync");
+    readdirSync = /* @__PURE__ */ notImplemented("fs.readdirSync");
+    readSync = /* @__PURE__ */ notImplemented("fs.readSync");
+    readvSync = /* @__PURE__ */ notImplemented("fs.readvSync");
+    readFileSync = /* @__PURE__ */ notImplemented("fs.readFileSync");
+    readlinkSync = /* @__PURE__ */ notImplemented("fs.readlinkSync");
+    renameSync = /* @__PURE__ */ notImplemented("fs.renameSync");
+    rmSync = /* @__PURE__ */ notImplemented("fs.rmSync");
+    rmdirSync = /* @__PURE__ */ notImplemented("fs.rmdirSync");
+    symlinkSync = /* @__PURE__ */ notImplemented("fs.symlinkSync");
+    truncateSync = /* @__PURE__ */ notImplemented("fs.truncateSync");
+    unlinkSync = /* @__PURE__ */ notImplemented("fs.unlinkSync");
+    utimesSync = /* @__PURE__ */ notImplemented("fs.utimesSync");
+    writeFileSync = /* @__PURE__ */ notImplemented("fs.writeFileSync");
+    writeSync = /* @__PURE__ */ notImplemented("fs.writeSync");
+    writevSync = /* @__PURE__ */ notImplemented("fs.writevSync");
+    statfsSync = /* @__PURE__ */ notImplemented("fs.statfsSync");
+    globSync = /* @__PURE__ */ notImplemented("fs.globSync");
+  }
+});
+
+// ../node_modules/unenv/dist/runtime/node/fs.mjs
+var fs_exports = {};
+__export(fs_exports, {
+  Dir: () => Dir,
+  Dirent: () => Dirent,
+  F_OK: () => F_OK,
+  FileReadStream: () => FileReadStream,
+  FileWriteStream: () => FileWriteStream,
+  R_OK: () => R_OK,
+  ReadStream: () => ReadStream2,
+  Stats: () => Stats,
+  W_OK: () => W_OK,
+  WriteStream: () => WriteStream2,
+  X_OK: () => X_OK,
+  _toUnixTimestamp: () => _toUnixTimestamp,
+  access: () => access2,
+  accessSync: () => accessSync,
+  appendFile: () => appendFile2,
+  appendFileSync: () => appendFileSync,
+  chmod: () => chmod2,
+  chmodSync: () => chmodSync,
+  chown: () => chown2,
+  chownSync: () => chownSync,
+  close: () => close,
+  closeSync: () => closeSync,
+  constants: () => constants_exports,
+  copyFile: () => copyFile2,
+  copyFileSync: () => copyFileSync,
+  cp: () => cp2,
+  cpSync: () => cpSync,
+  createReadStream: () => createReadStream,
+  createWriteStream: () => createWriteStream,
+  default: () => fs_default,
+  exists: () => exists,
+  existsSync: () => existsSync,
+  fchmod: () => fchmod,
+  fchmodSync: () => fchmodSync,
+  fchown: () => fchown,
+  fchownSync: () => fchownSync,
+  fdatasync: () => fdatasync,
+  fdatasyncSync: () => fdatasyncSync,
+  fstat: () => fstat,
+  fstatSync: () => fstatSync,
+  fsync: () => fsync,
+  fsyncSync: () => fsyncSync,
+  ftruncate: () => ftruncate,
+  ftruncateSync: () => ftruncateSync,
+  futimes: () => futimes,
+  futimesSync: () => futimesSync,
+  glob: () => glob2,
+  globSync: () => globSync,
+  lchmod: () => lchmod2,
+  lchmodSync: () => lchmodSync,
+  lchown: () => lchown2,
+  lchownSync: () => lchownSync,
+  link: () => link2,
+  linkSync: () => linkSync,
+  lstat: () => lstat2,
+  lstatSync: () => lstatSync,
+  lutimes: () => lutimes2,
+  lutimesSync: () => lutimesSync,
+  mkdir: () => mkdir2,
+  mkdirSync: () => mkdirSync,
+  mkdtemp: () => mkdtemp2,
+  mkdtempSync: () => mkdtempSync,
+  open: () => open2,
+  openAsBlob: () => openAsBlob,
+  openSync: () => openSync,
+  opendir: () => opendir2,
+  opendirSync: () => opendirSync,
+  promises: () => promises_default,
+  read: () => read,
+  readFile: () => readFile2,
+  readFileSync: () => readFileSync,
+  readSync: () => readSync,
+  readdir: () => readdir2,
+  readdirSync: () => readdirSync,
+  readlink: () => readlink2,
+  readlinkSync: () => readlinkSync,
+  readv: () => readv,
+  readvSync: () => readvSync,
+  realpath: () => realpath2,
+  realpathSync: () => realpathSync,
+  rename: () => rename2,
+  renameSync: () => renameSync,
+  rm: () => rm2,
+  rmSync: () => rmSync,
+  rmdir: () => rmdir2,
+  rmdirSync: () => rmdirSync,
+  stat: () => stat2,
+  statSync: () => statSync,
+  statfs: () => statfs2,
+  statfsSync: () => statfsSync,
+  symlink: () => symlink2,
+  symlinkSync: () => symlinkSync,
+  truncate: () => truncate2,
+  truncateSync: () => truncateSync,
+  unlink: () => unlink2,
+  unlinkSync: () => unlinkSync,
+  unwatchFile: () => unwatchFile,
+  utimes: () => utimes2,
+  utimesSync: () => utimesSync,
+  watch: () => watch2,
+  watchFile: () => watchFile,
+  write: () => write,
+  writeFile: () => writeFile2,
+  writeFileSync: () => writeFileSync,
+  writeSync: () => writeSync,
+  writev: () => writev,
+  writevSync: () => writevSync
+});
+var fs_default;
+var init_fs2 = __esm({
+  "../node_modules/unenv/dist/runtime/node/fs.mjs"() {
+    init_strip_cf_connecting_ip_header();
+    init_modules_watch_stub();
+    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
+    init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
+    init_performance2();
+    init_promises2();
+    init_classes();
+    init_fs();
+    init_constants3();
+    init_constants3();
+    init_constants3();
+    init_fs();
+    init_classes();
+    fs_default = {
+      F_OK,
+      R_OK,
+      W_OK,
+      X_OK,
+      constants: constants_exports,
+      promises: promises_default,
+      Dir,
+      Dirent,
+      FileReadStream,
+      FileWriteStream,
+      ReadStream: ReadStream2,
+      Stats,
+      WriteStream: WriteStream2,
+      _toUnixTimestamp,
+      access: access2,
+      accessSync,
+      appendFile: appendFile2,
+      appendFileSync,
+      chmod: chmod2,
+      chmodSync,
+      chown: chown2,
+      chownSync,
+      close,
+      closeSync,
+      copyFile: copyFile2,
+      copyFileSync,
+      cp: cp2,
+      cpSync,
+      createReadStream,
+      createWriteStream,
+      exists,
+      existsSync,
+      fchmod,
+      fchmodSync,
+      fchown,
+      fchownSync,
+      fdatasync,
+      fdatasyncSync,
+      fstat,
+      fstatSync,
+      fsync,
+      fsyncSync,
+      ftruncate,
+      ftruncateSync,
+      futimes,
+      futimesSync,
+      glob: glob2,
+      lchmod: lchmod2,
+      globSync,
+      lchmodSync,
+      lchown: lchown2,
+      lchownSync,
+      link: link2,
+      linkSync,
+      lstat: lstat2,
+      lstatSync,
+      lutimes: lutimes2,
+      lutimesSync,
+      mkdir: mkdir2,
+      mkdirSync,
+      mkdtemp: mkdtemp2,
+      mkdtempSync,
+      open: open2,
+      openAsBlob,
+      openSync,
+      opendir: opendir2,
+      opendirSync,
+      read,
+      readFile: readFile2,
+      readFileSync,
+      readSync,
+      readdir: readdir2,
+      readdirSync,
+      readlink: readlink2,
+      readlinkSync,
+      readv,
+      readvSync,
+      realpath: realpath2,
+      realpathSync,
+      rename: rename2,
+      renameSync,
+      rm: rm2,
+      rmSync,
+      rmdir: rmdir2,
+      rmdirSync,
+      stat: stat2,
+      statSync,
+      statfs: statfs2,
+      statfsSync,
+      symlink: symlink2,
+      symlinkSync,
+      truncate: truncate2,
+      truncateSync,
+      unlink: unlink2,
+      unlinkSync,
+      unwatchFile,
+      utimes: utimes2,
+      utimesSync,
+      watch: watch2,
+      watchFile,
+      write,
+      writeFile: writeFile2,
+      writeFileSync,
+      writeSync,
+      writev,
+      writevSync
     };
   }
 });
@@ -8083,7 +8689,7 @@ __name(sql, "sql");
   }
   __name(raw2, "raw");
   sql2.raw = raw2;
-  function join2(chunks, separator) {
+  function join(chunks, separator) {
     const result = [];
     for (const [i, chunk] of chunks.entries()) {
       if (i > 0 && separator !== void 0) {
@@ -8093,8 +8699,8 @@ __name(sql, "sql");
     }
     return new SQL(result);
   }
-  __name(join2, "join");
-  sql2.join = join2;
+  __name(join, "join");
+  sql2.join = join;
   function identifier(value) {
     return new Name(value);
   }
@@ -9137,111 +9743,6 @@ init_modules_watch_stub();
 init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
 init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
 init_performance2();
-
-// ../node_modules/unenv/dist/runtime/node/fs.mjs
-init_strip_cf_connecting_ip_header();
-init_modules_watch_stub();
-init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
-init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
-init_performance2();
-
-// ../node_modules/unenv/dist/runtime/node/fs/promises.mjs
-init_strip_cf_connecting_ip_header();
-init_modules_watch_stub();
-init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
-init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
-init_performance2();
-
-// ../node_modules/unenv/dist/runtime/node/internal/fs/promises.mjs
-init_strip_cf_connecting_ip_header();
-init_modules_watch_stub();
-init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
-init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
-init_performance2();
-init_utils();
-var access = /* @__PURE__ */ notImplemented("fs.access");
-var copyFile = /* @__PURE__ */ notImplemented("fs.copyFile");
-var cp = /* @__PURE__ */ notImplemented("fs.cp");
-var open = /* @__PURE__ */ notImplemented("fs.open");
-var opendir = /* @__PURE__ */ notImplemented("fs.opendir");
-var rename = /* @__PURE__ */ notImplemented("fs.rename");
-var truncate = /* @__PURE__ */ notImplemented("fs.truncate");
-var rm = /* @__PURE__ */ notImplemented("fs.rm");
-var rmdir = /* @__PURE__ */ notImplemented("fs.rmdir");
-var mkdir = /* @__PURE__ */ notImplemented("fs.mkdir");
-var readdir = /* @__PURE__ */ notImplemented("fs.readdir");
-var readlink = /* @__PURE__ */ notImplemented("fs.readlink");
-var symlink = /* @__PURE__ */ notImplemented("fs.symlink");
-var lstat = /* @__PURE__ */ notImplemented("fs.lstat");
-var stat = /* @__PURE__ */ notImplemented("fs.stat");
-var link = /* @__PURE__ */ notImplemented("fs.link");
-var unlink = /* @__PURE__ */ notImplemented("fs.unlink");
-var chmod = /* @__PURE__ */ notImplemented("fs.chmod");
-var lchmod = /* @__PURE__ */ notImplemented("fs.lchmod");
-var lchown = /* @__PURE__ */ notImplemented("fs.lchown");
-var chown = /* @__PURE__ */ notImplemented("fs.chown");
-var utimes = /* @__PURE__ */ notImplemented("fs.utimes");
-var lutimes = /* @__PURE__ */ notImplemented("fs.lutimes");
-var realpath = /* @__PURE__ */ notImplemented("fs.realpath");
-var mkdtemp = /* @__PURE__ */ notImplemented("fs.mkdtemp");
-var writeFile = /* @__PURE__ */ notImplemented("fs.writeFile");
-var appendFile = /* @__PURE__ */ notImplemented("fs.appendFile");
-var readFile = /* @__PURE__ */ notImplemented("fs.readFile");
-var statfs = /* @__PURE__ */ notImplemented("fs.statfs");
-
-// ../node_modules/unenv/dist/runtime/node/internal/fs/fs.mjs
-init_strip_cf_connecting_ip_header();
-init_modules_watch_stub();
-init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_process();
-init_virtual_unenv_global_polyfill_cloudflare_unenv_preset_node_console();
-init_performance2();
-init_utils();
-function callbackify(fn) {
-  const fnc = /* @__PURE__ */ __name(function(...args) {
-    const cb = args.pop();
-    fn().catch((error3) => cb(error3)).then((val) => cb(void 0, val));
-  }, "fnc");
-  fnc.__promisify__ = fn;
-  fnc.native = fnc;
-  return fnc;
-}
-__name(callbackify, "callbackify");
-var access2 = callbackify(access);
-var appendFile2 = callbackify(appendFile);
-var chown2 = callbackify(chown);
-var chmod2 = callbackify(chmod);
-var copyFile2 = callbackify(copyFile);
-var cp2 = callbackify(cp);
-var lchown2 = callbackify(lchown);
-var lchmod2 = callbackify(lchmod);
-var link2 = callbackify(link);
-var lstat2 = callbackify(lstat);
-var lutimes2 = callbackify(lutimes);
-var mkdir2 = callbackify(mkdir);
-var mkdtemp2 = callbackify(mkdtemp);
-var realpath2 = callbackify(realpath);
-var open2 = callbackify(open);
-var opendir2 = callbackify(opendir);
-var readdir2 = callbackify(readdir);
-var readFile2 = callbackify(readFile);
-var readlink2 = callbackify(readlink);
-var rename2 = callbackify(rename);
-var rm2 = callbackify(rm);
-var rmdir2 = callbackify(rmdir);
-var stat2 = callbackify(stat);
-var symlink2 = callbackify(symlink);
-var truncate2 = callbackify(truncate);
-var unlink2 = callbackify(unlink);
-var utimes2 = callbackify(utimes);
-var writeFile2 = callbackify(writeFile);
-var statfs2 = callbackify(statfs);
-var existsSync = /* @__PURE__ */ __name(() => false, "existsSync");
-var readdirSync = /* @__PURE__ */ notImplemented("fs.readdirSync");
-var readFileSync = /* @__PURE__ */ notImplemented("fs.readFileSync");
-var writeFileSync = /* @__PURE__ */ notImplemented("fs.writeFileSync");
-
-// src/lib/migrationLoader.ts
-import * as path from "node:path";
 var MigrationLoader = class {
   isProduction;
   manifest = null;
@@ -9266,7 +9767,7 @@ var MigrationLoader = class {
       }));
     }
     if (!this.isProduction) {
-      return this.listFromFilesystem();
+      return await this.listFromFilesystem();
     }
     return [];
   }
@@ -9278,14 +9779,16 @@ var MigrationLoader = class {
       return null;
     }
     try {
+      const fs = await Promise.resolve().then(() => (init_fs2(), fs_exports));
+      const path = await import("node:path");
       const possiblePaths = [
         path.join(process.cwd(), "db", "migrations", filename),
         path.join(process.cwd(), "..", "db", "migrations", filename),
         path.join(process.cwd(), "backend", "db", "migrations", filename)
       ];
       for (const p of possiblePaths) {
-        if (existsSync(p)) {
-          return readFileSync(p, "utf-8");
+        if (fs.existsSync(p)) {
+          return fs.readFileSync(p, "utf-8");
         }
       }
       console.error(`Migration file not found: ${filename}`);
@@ -9298,24 +9801,31 @@ var MigrationLoader = class {
   /**
    * List migrations from filesystem (local development)
    */
-  listFromFilesystem() {
-    const possiblePaths = [
-      path.join(process.cwd(), "db", "migrations"),
-      path.join(process.cwd(), "..", "db", "migrations"),
-      path.join(process.cwd(), "backend", "db", "migrations")
-    ];
-    for (const migrationsPath of possiblePaths) {
-      if (existsSync(migrationsPath)) {
-        console.log(`[MigrationLoader] Found migrations at: ${migrationsPath}`);
-        const files = readdirSync(migrationsPath).filter((f) => f.endsWith(".sql")).sort();
-        return files.map((name) => ({
-          id: this.extractId(name),
-          name
-        }));
+  async listFromFilesystem() {
+    try {
+      const fs = await Promise.resolve().then(() => (init_fs2(), fs_exports));
+      const path = await import("node:path");
+      const possiblePaths = [
+        path.join(process.cwd(), "db", "migrations"),
+        path.join(process.cwd(), "..", "db", "migrations"),
+        path.join(process.cwd(), "backend", "db", "migrations")
+      ];
+      for (const migrationsPath of possiblePaths) {
+        if (fs.existsSync(migrationsPath)) {
+          console.log(`[MigrationLoader] Found migrations at: ${migrationsPath}`);
+          const files = fs.readdirSync(migrationsPath).filter((f) => f.endsWith(".sql")).sort();
+          return files.map((name) => ({
+            id: this.extractId(name),
+            name
+          }));
+        }
       }
+      console.warn(`[MigrationLoader] No migrations directory found. Checked: ${possiblePaths.join(", ")}`);
+      return [];
+    } catch (e) {
+      console.error("Failed to list migrations from filesystem:", e);
+      return [];
     }
-    console.warn(`[MigrationLoader] No migrations directory found. Checked: ${possiblePaths.join(", ")}`);
-    return [];
   }
   /**
    * Extract migration ID from filename
@@ -9334,18 +9844,20 @@ var MigrationLoader = class {
   /**
    * Generate manifest file (for build scripts)
    */
-  static generateManifest(outputPath) {
+  static async generateManifest(outputPath) {
+    const fs = await Promise.resolve().then(() => (init_fs2(), fs_exports));
+    const path = await import("node:path");
     const migrationsDir = path.join(process.cwd(), "db", "migrations");
-    if (!existsSync(migrationsDir)) {
+    if (!fs.existsSync(migrationsDir)) {
       console.error(`Migrations directory not found: ${migrationsDir}`);
       process.exit(1);
     }
-    const files = readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort();
+    const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort();
     const manifest = {
       migrations: files,
       generated: (/* @__PURE__ */ new Date()).toISOString()
     };
-    writeFileSync(outputPath, JSON.stringify(manifest, null, 2));
+    fs.writeFileSync(outputPath, JSON.stringify(manifest, null, 2));
     console.log(`\u2705 Generated manifest with ${files.length} migrations`);
     console.log(files);
   }
